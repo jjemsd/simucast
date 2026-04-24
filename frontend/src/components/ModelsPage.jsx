@@ -20,15 +20,12 @@ export default function ModelsPage({ dataset, setActiveModel, onGo }) {
   useEffect(() => {
     if (!dataset) return
     api.listModels(dataset.id).then(setModels).catch(console.error)
-    // auto-pick the target variable marked as target, if any
-    const t = (dataset.variables || []).find((v) => v.role === 'target')
-    if (t) setTarget(t.name)
   }, [dataset?.id])
 
   if (!dataset) return <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Upload a dataset first.</p>
 
   const variables = dataset.variables || []
-  const candidateFeatures = variables.filter((v) => v.role !== 'ignore' && v.name !== target)
+  const candidateFeatures = variables.filter((v) => v.name !== target)
 
   const toggleFeature = (name) => {
     setFeatures(features.includes(name) ? features.filter((x) => x !== name) : [...features, name])

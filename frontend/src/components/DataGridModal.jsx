@@ -5,9 +5,9 @@ import { api } from '../api'
  * DataGridModal
  * Excel/SPSS-style viewer with two tabs:
  *   - Data View: paginated grid of actual rows (frozen row numbers, column headers show dtype)
- *   - Variable View: metadata about each column (name, type, role, missing, unique)
+ *   - Variable View: metadata about each column (name, type, missing, unique)
  */
-export default function DataGridModal({ datasetId, variables, onClose, onVariableUpdate }) {
+export default function DataGridModal({ datasetId, variables, onClose }) {
   const [tab, setTab] = useState('data')
   const [rows, setRows] = useState([])
   const [page, setPage] = useState(1)
@@ -130,7 +130,6 @@ export default function DataGridModal({ datasetId, variables, onClose, onVariabl
                   <tr>
                     <th>Name</th>
                     <th>Type</th>
-                    <th>Role</th>
                     <th>Missing</th>
                     <th>Unique</th>
                   </tr>
@@ -149,17 +148,6 @@ export default function DataGridModal({ datasetId, variables, onClose, onVariabl
                         >
                           {v.dtype}
                         </span>
-                      </td>
-                      <td>
-                        <select
-                          value={v.role}
-                          onChange={(e) => onVariableUpdate(v.name, { role: e.target.value })}
-                          style={{ fontSize: 11, padding: '3px 6px' }}
-                        >
-                          <option value="feature">feature</option>
-                          <option value="target">target</option>
-                          <option value="ignore">ignore</option>
-                        </select>
                       </td>
                       <td>{v.missing}</td>
                       <td>{v.unique}</td>

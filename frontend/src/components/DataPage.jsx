@@ -37,12 +37,6 @@ export default function DataPage({ dataset, setDataset }) {
     setDataset(full)
   }
 
-  const handleVarUpdate = async (varName, body) => {
-    if (!dataset) return
-    const r = await api.updateVariable(dataset.id, varName, body)
-    setDataset({ ...dataset, variables: r.variables })
-  }
-
   const askAi = async () => {
     if (!dataset || !aiPrompt.trim()) return
     const r = await api.aiSuggest(dataset.id, aiPrompt)
@@ -151,7 +145,7 @@ export default function DataPage({ dataset, setDataset }) {
                   <th>Name</th>
                   <th>Type</th>
                   <th>Missing</th>
-                  <th>Role</th>
+                  <th>Unique</th>
                 </tr>
               </thead>
               <tbody>
@@ -162,17 +156,7 @@ export default function DataPage({ dataset, setDataset }) {
                       <span style={{ color: 'var(--color-text-info)' }}>{v.dtype}</span>
                     </td>
                     <td>{v.missing}</td>
-                    <td>
-                      <select
-                        value={v.role}
-                        onChange={(e) => handleVarUpdate(v.name, { role: e.target.value })}
-                        style={{ fontSize: 10, padding: '2px 4px' }}
-                      >
-                        <option value="feature">feature</option>
-                        <option value="target">target</option>
-                        <option value="ignore">ignore</option>
-                      </select>
-                    </td>
+                    <td>{v.unique}</td>
                   </tr>
                 ))}
               </tbody>
@@ -211,7 +195,6 @@ export default function DataPage({ dataset, setDataset }) {
           datasetId={dataset.id}
           variables={dataset.variables || []}
           onClose={() => setShowModal(false)}
-          onVariableUpdate={handleVarUpdate}
         />
       )}
     </>
