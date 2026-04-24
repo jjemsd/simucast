@@ -3,7 +3,6 @@ Axion — data analysis backend
 Flask + SQLAlchemy + pandas + scipy + scikit-learn
 """
 import os
-import io
 import json
 import time
 import uuid
@@ -11,7 +10,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text
 from sqlalchemy.exc import OperationalError
@@ -32,7 +31,11 @@ from sklearn.metrics import (
 
 # --- app + db setup ---
 app = Flask(__name__)
-CORS(app, origins=os.environ.get("CORS_ORIGINS", "*").split(","))
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB upload cap
+
+_cors_raw = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] or ["*"]
+CORS(app, origins=_cors_origins)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -169,6 +172,15 @@ def numeric_df(df, cols=None):
         df = df[cols]
     return df.select_dtypes(include=[np.number])
 
+def _parse_num(value, default, cast):
+    """Safely cast a user-supplied value; fall back to default on bad input."""
+    if value is None:
+        return default
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return default
+
 def clean_json(obj):
     """Convert numpy/pandas types to JSON-safe primitives."""
     if isinstance(obj, dict):
@@ -282,8 +294,8 @@ def get_dataset(ds_id):
 @app.route("/api/datasets/<ds_id>/rows", methods=["GET"])
 def get_rows(ds_id):
     """Paginated row data for the Excel-like grid."""
-    page = int(request.args.get("page", 1))
-    page_size = min(int(request.args.get("page_size", 100)), 1000)
+    page = max(_parse_num(request.args.get("page"), 1, int), 1)
+    page_size = min(max(_parse_num(request.args.get("page_size"), 100, int), 1), 1000)
     s = db()
     try:
         ds = s.query(Dataset).filter_by(id=ds_id).first()
@@ -598,10 +610,12 @@ def _chi_interpret(chi2, p, a, b):
 def do_cluster(ds_id):
     body = request.get_json() or {}
     cols = body.get("variables") or []
-    k = int(body.get("k", 4))
+    k = min(max(_parse_num(body.get("k"), 4, int), 2), 20)
     s = db()
     try:
         ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
         df = df_from_dataset(ds)
         X = numeric_df(df, cols).dropna()
         if len(X) == 0:
@@ -631,8 +645,12 @@ def do_pca(ds_id):
     s = db()
     try:
         ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
         df = df_from_dataset(ds)
         X = numeric_df(df, cols).dropna()
+        if X.shape[1] == 0:
+            return {"error": "no numeric data"}, 400
         Xs = StandardScaler().fit_transform(X)
         n_comp = min(5, X.shape[1])
         pca = PCA(n_components=n_comp).fit(Xs)
@@ -658,11 +676,13 @@ def train_model(ds_id):
     target = body.get("target")
     features = body.get("features") or []
     algo = body.get("algorithm", "logistic")  # logistic | rf | gbm | linear
-    test_size = float(body.get("test_size", 0.2))
+    test_size = min(max(_parse_num(body.get("test_size"), 0.2, float), 0.05), 0.5)
 
     s = db()
     try:
         ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
         df = df_from_dataset(ds)
         if target not in df.columns:
             return {"error": f"target {target} not found"}, 400
@@ -1012,4 +1032,5 @@ def _save_analysis(session, ds_id, kind, config, result):
 # ========================================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host="0.0.0.0", port=port, debug=debug)
