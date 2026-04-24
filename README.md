@@ -78,7 +78,7 @@ Runs on `http://localhost:5173`, proxying `/api` to the backend.
 | GET | `/api/datasets` | List datasets |
 | GET | `/api/datasets/<id>` | Dataset + variables |
 | GET | `/api/datasets/<id>/rows?page=&page_size=` | Paginated rows |
-| PATCH | `/api/datasets/<id>/variables/<name>` | Update role/dtype |
+| PATCH | `/api/datasets/<id>/variables/<name>` | Update dtype |
 | GET | `/api/datasets/<id>/clean/suggestions` | AI-flagged issues |
 | POST | `/api/datasets/<id>/clean/apply` | Apply a fix |
 | POST | `/api/datasets/<id>/describe` | Descriptives + histogram |
@@ -96,7 +96,7 @@ Runs on `http://localhost:5173`, proxying `/api` to the backend.
 
 Four places benefit from the Excel/SPSS feel — it's not just a data viewer, it's a design pattern that makes the whole product feel professional:
 
-1. **Data grid modal** (`DataGridModal.jsx`) — the "View data grid" button on the Data page opens a full-screen modal that mirrors SPSS exactly: a **Data View** tab with the paginated grid (sticky row numbers, sticky header with dtype badges, monospace cells, missing values highlighted red) and a **Variable View** tab showing column metadata with inline role editing.
+1. **Data grid modal** (`DataGridModal.jsx`) — the "View data grid" button on the Data page opens a full-screen modal that mirrors SPSS exactly: a **Data View** tab with the paginated grid (sticky row numbers, sticky header with dtype badges, monospace cells, missing values highlighted red) and a **Variable View** tab showing column metadata.
 2. **Descriptive stats output** (`DescribePage.jsx`) — numeric and categorical summaries rendered as SPSS-style output tables with every statistic as a column, identical to how SPSS's Output Viewer presents `DESCRIPTIVES` results.
 3. **Correlation matrix** (`TestsPage.jsx` → correlation) — heatmap-styled matrix with stronger correlations shaded, matching SPSS's `CORRELATIONS` output.
 4. **Contingency table / crosstab** (Chi-square result) — could be extended to show the full crosstab with row/column/expected counts like SPSS's `CROSSTABS`.

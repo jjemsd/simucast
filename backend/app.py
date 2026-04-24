@@ -64,7 +64,7 @@ class Dataset(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     row_count = Column(Integer, default=0)
     col_count = Column(Integer, default=0)
-    variables = _json_col()      # [{name, dtype, role, missing}]
+    variables = _json_col()      # [{name, dtype, missing, unique}]
     data = _json_col()           # [{col: val, ...}, ...] (for small datasets)
 
 class Analysis(Base):
@@ -144,7 +144,7 @@ def df_from_dataset(ds):
     return pd.DataFrame(rows)
 
 def infer_variables(df):
-    """Produce variable metadata: name, dtype, role, missing."""
+    """Produce variable metadata: name, dtype, missing, unique."""
     out = []
     for col in df.columns:
         series = df[col]
@@ -165,15 +165,9 @@ def infer_variables(df):
                 dtype = "datetime"
             except Exception:
                 dtype = "category" if unique <= 20 else "text"
-        # role heuristic
-        name_lower = col.lower()
-        role = "feature"
-        if name_lower.endswith("_id") or name_lower == "id":
-            role = "ignore"
         out.append({
             "name": col,
             "dtype": dtype,
-            "role": role,
             "missing": missing,
             "unique": int(unique),
         })
@@ -339,7 +333,7 @@ def get_rows(ds_id):
 
 @app.route("/api/datasets/<ds_id>/variables/<var_name>", methods=["PATCH"])
 def update_variable(ds_id, var_name):
-    """Update variable role (feature/target/ignore) or dtype."""
+    """Update variable dtype."""
     body = request.get_json() or {}
     s = db()
     try:
@@ -349,8 +343,6 @@ def update_variable(ds_id, var_name):
         variables = jload(ds.variables) or []
         for v in variables:
             if v["name"] == var_name:
-                if "role" in body:
-                    v["role"] = body["role"]
                 if "dtype" in body:
                     v["dtype"] = body["dtype"]
                 break
