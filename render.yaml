@@ -13,8 +13,10 @@ services:
         fromDatabase:
           name: simucast-db
           property: connectionString
+      # Lock CORS to the web service's public URL. If you rename the web
+      # service or use a custom domain, update this value.
       - key: CORS_ORIGINS
-        value: "*"
+        value: https://simucast-web.onrender.com
       - key: PYTHON_VERSION
         value: "3.11"
 
