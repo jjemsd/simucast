@@ -1,0 +1,392 @@
+/* ============================================================
+   Axion — global styles
+   Flat, Anthropic-inspired design; light + dark mode via prefers-color-scheme
+   ============================================================ */
+
+:root {
+  --color-background-primary: #ffffff;
+  --color-background-secondary: #f5f4ef;
+  --color-background-tertiary: #faf9f5;
+  --color-background-info: #E6F1FB;
+  --color-background-success: #E1F5EE;
+  --color-background-warning: #FAEEDA;
+  --color-background-danger: #FCEBEB;
+  --color-text-primary: #191919;
+  --color-text-secondary: #5f5e5a;
+  --color-text-tertiary: #888780;
+  --color-text-info: #185FA5;
+  --color-text-success: #0F6E56;
+  --color-text-warning: #854F0B;
+  --color-text-danger: #A32D2D;
+  --color-border-tertiary: rgba(0, 0, 0, 0.08);
+  --color-border-secondary: rgba(0, 0, 0, 0.15);
+  --color-border-primary: rgba(0, 0, 0, 0.25);
+  --color-border-info: #85B7EB;
+  --color-accent: #7F77DD;
+  --color-accent-dark: #3C3489;
+  --color-accent-light: #EEEDFE;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', Monaco, Menlo, Consolas, monospace;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background-primary: #1f1e1d;
+    --color-background-secondary: #2a2927;
+    --color-background-tertiary: #191918;
+    --color-background-info: #0C447C;
+    --color-background-success: #085041;
+    --color-background-warning: #633806;
+    --color-background-danger: #791F1F;
+    --color-text-primary: #f2f2f0;
+    --color-text-secondary: #b4b2a9;
+    --color-text-tertiary: #888780;
+    --color-text-info: #85B7EB;
+    --color-text-success: #5DCAA5;
+    --color-text-warning: #EF9F27;
+    --color-text-danger: #F09595;
+    --color-border-tertiary: rgba(255, 255, 255, 0.1);
+    --color-border-secondary: rgba(255, 255, 255, 0.2);
+    --color-border-primary: rgba(255, 255, 255, 0.3);
+    --color-accent: #AFA9EC;
+    --color-accent-dark: #CECBF6;
+    --color-accent-light: #3C3489;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-background-tertiary);
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, select, textarea {
+  font-family: inherit;
+}
+
+input[type="text"], input[type="number"], select, textarea {
+  padding: 6px 10px;
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md);
+  font-size: 13px;
+  background: var(--color-background-primary);
+  color: var(--color-text-primary);
+  outline: none;
+}
+input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
+  border-color: var(--color-border-info);
+  box-shadow: 0 0 0 2px var(--color-background-info);
+}
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 18px;
+  width: 100%;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--color-border-tertiary);
+  border-radius: 2px;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--color-border-tertiary);
+  border-radius: 2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  margin-top: -7px;
+  cursor: pointer;
+  border: none;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  cursor: pointer;
+  border: none;
+}
+
+/* --- reusable classes --- */
+.ax-card {
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-md);
+  padding: 12px;
+}
+.ax-lbl {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin: 4px 2px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ax-btn {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 0.5px solid var(--color-border-secondary);
+  background: transparent;
+  color: var(--color-text-primary);
+  transition: background 0.1s;
+}
+.ax-btn:hover:not(:disabled) { background: var(--color-background-secondary); }
+.ax-btn.prim {
+  background: var(--color-text-primary);
+  color: var(--color-background-primary);
+  border-color: transparent;
+}
+.ax-btn.prim:hover:not(:disabled) { opacity: 0.9; }
+.ax-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ax-pill {
+  font-size: 11px;
+  padding: 4px 11px;
+  border-radius: 14px;
+  background: var(--color-background-secondary);
+  color: var(--color-text-secondary);
+  border: none;
+  cursor: pointer;
+}
+.ax-pill.active {
+  background: var(--color-accent-light);
+  color: var(--color-accent-dark);
+  font-weight: 500;
+}
+
+.ax-chip {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  background: var(--color-background-secondary);
+  color: var(--color-text-secondary);
+  display: inline-block;
+  cursor: pointer;
+  user-select: none;
+}
+.ax-chip.active {
+  background: var(--color-accent-light);
+  color: var(--color-accent-dark);
+}
+
+.ax-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* --- tables --- */
+.ax-tbl {
+  width: 100%;
+  font-size: 11px;
+  border-collapse: collapse;
+}
+.ax-tbl th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+  background: var(--color-background-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ax-tbl td {
+  padding: 6px 8px;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+}
+
+/* --- layout --- */
+.ax-app {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  min-height: 100vh;
+}
+
+.ax-sidebar {
+  border-right: 0.5px solid var(--color-border-tertiary);
+  background: var(--color-background-primary);
+  padding: 14px 10px;
+}
+
+.ax-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ax-nav:hover { background: var(--color-background-secondary); }
+.ax-nav.active {
+  background: var(--color-background-secondary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.ax-main {
+  padding: 20px 28px;
+  background: var(--color-background-tertiary);
+  max-width: 1100px;
+}
+
+.ax-page-title {
+  font-size: 20px;
+  font-weight: 500;
+  margin: 0;
+}
+.ax-page-sub {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 3px 0 16px;
+}
+
+/* --- modal --- */
+.ax-modal-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.ax-modal {
+  background: var(--color-background-primary);
+  border-radius: var(--border-radius-lg);
+  width: min(1000px, 95vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.5px solid var(--color-border-tertiary);
+}
+.ax-modal-header {
+  padding: 14px 18px;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ax-modal-body {
+  overflow: auto;
+  flex: 1;
+}
+
+/* --- Excel/SPSS data grid --- */
+.ax-grid-wrap {
+  overflow: auto;
+  max-height: 65vh;
+}
+.ax-grid {
+  width: max-content;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.ax-grid thead th {
+  background: var(--color-background-secondary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+  padding: 6px 10px;
+  border: 0.5px solid var(--color-border-tertiary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  text-align: left;
+  min-width: 100px;
+  white-space: nowrap;
+}
+.ax-grid thead .ax-grid-type {
+  display: block;
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+  font-family: var(--font-sans);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+.ax-grid tbody td {
+  padding: 5px 10px;
+  border: 0.5px solid var(--color-border-tertiary);
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ax-grid tbody tr:nth-child(even) td {
+  background: var(--color-background-secondary);
+}
+.ax-grid tbody tr:hover td {
+  background: var(--color-accent-light);
+}
+.ax-grid td.ax-grid-row-num {
+  background: var(--color-background-secondary);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  text-align: right;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 40px;
+}
+.ax-grid th.ax-grid-row-num-head {
+  min-width: 40px;
+  left: 0;
+  z-index: 3;
+}
+.ax-grid td.missing {
+  color: var(--color-text-danger);
+  background: var(--color-background-danger) !important;
+  font-style: italic;
+}
+
+/* --- tabs (SPSS Data View / Variable View) --- */
+.ax-tabs {
+  display: flex;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+  padding: 0 18px;
+  gap: 4px;
+}
+.ax-tab {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -0.5px;
+}
+.ax-tab.active {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-accent);
+  font-weight: 500;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;
+}
