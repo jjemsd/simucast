@@ -89,18 +89,31 @@ class Model(Base):
     coefficients = _json_col()    # for what-if predictions
     created_at = Column(DateTime, default=datetime.utcnow)
 
-def _init_db(retries=10, delay=3):
+# DB initialization is deferred to the first request so gunicorn can bind
+# to its port immediately even when Postgres is still provisioning. Free-tier
+# Render Postgres can take several minutes to start accepting connections.
+_db_ready = False
+
+def _ensure_schema():
+    """Create tables if they don't exist yet. Safe to call repeatedly."""
+    global _db_ready
+    if _db_ready:
+        return
+    Base.metadata.create_all(engine)
+    _db_ready = True
+
+def _try_init_at_startup(retries=6, delay=5):
+    """Best-effort schema init at boot — swallow failures so we still start."""
     for i in range(retries):
         try:
-            Base.metadata.create_all(engine)
+            _ensure_schema()
             return
         except OperationalError as e:
-            if i == retries - 1:
-                raise
             print(f"DB not ready ({e.__class__.__name__}), retry {i+1}/{retries} in {delay}s", flush=True)
             time.sleep(delay)
+    print("DB not ready after startup retries; will init on first request", flush=True)
 
-_init_db()
+_try_init_at_startup()
 
 # --- helpers ---
 def db():
@@ -205,7 +218,18 @@ def clean_json(obj):
 
 @app.route("/api/health")
 def health():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+    return {"status": "ok", "db_ready": _db_ready, "time": datetime.utcnow().isoformat()}
+
+@app.before_request
+def _schema_guard():
+    """Lazy schema init. Skips health check so Render's probe stays fast."""
+    if _db_ready or request.path == "/api/health":
+        return None
+    try:
+        _ensure_schema()
+    except OperationalError:
+        return {"error": "database warming up, retry in a moment"}, 503
+    return None
 
 # --- Datasets ---
 
