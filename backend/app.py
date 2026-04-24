@@ -5,6 +5,7 @@ Flask + SQLAlchemy + pandas + scipy + scikit-learn
 import os
 import io
 import json
+import time
 import uuid
 from datetime import datetime
 
@@ -13,6 +14,7 @@ import pandas as pd
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -84,7 +86,18 @@ class Model(Base):
     coefficients = _json_col()    # for what-if predictions
     created_at = Column(DateTime, default=datetime.utcnow)
 
-Base.metadata.create_all(engine)
+def _init_db(retries=10, delay=3):
+    for i in range(retries):
+        try:
+            Base.metadata.create_all(engine)
+            return
+        except OperationalError as e:
+            if i == retries - 1:
+                raise
+            print(f"DB not ready ({e.__class__.__name__}), retry {i+1}/{retries} in {delay}s", flush=True)
+            time.sleep(delay)
+
+_init_db()
 
 # --- helpers ---
 def db():
