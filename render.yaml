@@ -2,7 +2,7 @@
 services:
   # --- backend API ---
   - type: web
-    name: simucast-api
+    name: simucast-api2
     runtime: python
     plan: free
     rootDir: backend
@@ -11,7 +11,7 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: simucast-db
+          name: simucast-db2
           property: connectionString
       - key: CORS_ORIGINS
         value: "*"
@@ -23,7 +23,7 @@ services:
   # can resolve paths incorrectly, causing CSS/JS to be served as text/plain.
   # Using cd in buildCommand + full path in staticPublishPath is more reliable.
   - type: web
-    name: simucast-web
+    name: simucast-web2
     runtime: static
     buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: ./frontend/dist
@@ -41,7 +41,7 @@ services:
 
 # --- database ---
 databases:
-  - name: simucast-db
+  - name: simucast-db2
     plan: free
     databaseName: simucast
     user: simucast
