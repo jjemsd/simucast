@@ -92,6 +92,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ op, params }),
     }),
+  expand: (id, body, preview = false) =>
+    request(`/api/datasets/${id}/expand${preview ? '?preview=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   // describe
   describe: (id, body) =>
