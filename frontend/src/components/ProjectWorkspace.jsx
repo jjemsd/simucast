@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
+import { useErrorToast } from '../ui/Toast'
 import DataPage from './DataPage'
 import CleanPage from './CleanPage'
 import DescribePage from './DescribePage'
@@ -28,6 +29,7 @@ export default function ProjectWorkspace() {
   const [activeModel, setActiveModel] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const showError = useErrorToast()
 
   useEffect(() => {
     setLoading(true)
@@ -35,7 +37,10 @@ export default function ProjectWorkspace() {
     api
       .getDataset(id)
       .then((d) => setDataset(d))
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        setError(err.message)
+        showError(err, 'Could not load project')
+      })
       .finally(() => setLoading(false))
   }, [id])
 

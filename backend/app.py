@@ -6,6 +6,7 @@ import os
 import json
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 
 import numpy as np
@@ -118,6 +119,19 @@ _try_init_at_startup()
 # --- helpers ---
 def db():
     return SessionLocal()
+
+@contextmanager
+def session_scope():
+    """Yields a session, commits at exit, rolls back on exception, always closes."""
+    s = SessionLocal()
+    try:
+        yield s
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise
+    finally:
+        s.close()
 
 def jload(v):
     """Safely load a JSON column value (dict, list, str, or None)."""
@@ -317,6 +331,18 @@ def get_dataset(ds_id):
         }
     finally:
         s.close()
+
+@app.route("/api/datasets/<ds_id>", methods=["DELETE"])
+def delete_dataset(ds_id):
+    """Delete a dataset and cascade-delete its analyses and models."""
+    with session_scope() as s:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        s.query(Analysis).filter_by(dataset_id=ds_id).delete(synchronize_session=False)
+        s.query(Model).filter_by(dataset_id=ds_id).delete(synchronize_session=False)
+        s.delete(ds)
+    return {"ok": True}
 
 @app.route("/api/datasets/<ds_id>/rows", methods=["GET"])
 def get_rows(ds_id):
@@ -853,6 +879,16 @@ def list_models(ds_id):
         } for r in rows])
     finally:
         s.close()
+
+@app.route("/api/models/<model_id>", methods=["DELETE"])
+def delete_model(model_id):
+    """Delete a single trained model."""
+    with session_scope() as s:
+        m = s.query(Model).filter_by(id=model_id).first()
+        if not m:
+            return {"error": "not found"}, 404
+        s.delete(m)
+    return {"ok": True}
 
 # --- What-if ---
 

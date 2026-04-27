@@ -40,6 +40,7 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  deleteDataset: (id) => request(`/api/datasets/${id}`, { method: 'DELETE' }),
 
   // cleaning
   cleanSuggestions: (id) => request(`/api/datasets/${id}/clean/suggestions`),
@@ -83,6 +84,7 @@ export const api = {
     }),
   listModels: (id) => request(`/api/datasets/${id}/models`),
   getModel: (mid) => request(`/api/models/${mid}`),
+  deleteModel: (mid) => request(`/api/models/${mid}`, { method: 'DELETE' }),
   predict: (mid, inputs) =>
     request(`/api/models/${mid}/predict`, {
       method: 'POST',

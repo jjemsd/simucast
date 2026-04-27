@@ -1,10 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useToast, useErrorToast } from '../ui/Toast'
+import { useConfirm } from '../ui/Confirm'
 
 export default function CleanPage({ dataset, setDataset }) {
   const [suggestions, setSuggestions] = useState([])
   const [statuses, setStatuses] = useState({}) // id -> 'applied' | 'skipped'
   const [loading, setLoading] = useState(false)
+  const toast = useToast()
+  const showError = useErrorToast()
+  const confirm = useConfirm()
 
   useEffect(() => {
     if (!dataset) return
@@ -17,6 +22,8 @@ export default function CleanPage({ dataset, setDataset }) {
       const r = await api.cleanSuggestions(dataset.id)
       setSuggestions(r.suggestions || [])
       setStatuses({})
+    } catch (err) {
+      showError(err, 'Could not load suggestions')
     } finally {
       setLoading(false)
     }
@@ -27,14 +34,20 @@ export default function CleanPage({ dataset, setDataset }) {
       setStatuses({ ...statuses, [s.id]: 'skipped' })
       return
     }
+    const ok = await confirm({
+      title: `Apply this fix?`,
+      message: `${s.description}\n\nThis modifies the "${s.variable}" column. The previous values cannot be recovered.`,
+      confirmLabel: 'Apply fix',
+    })
+    if (!ok) return
     try {
       await api.cleanApply(dataset.id, { action: s.action, variable: s.variable })
       setStatuses({ ...statuses, [s.id]: 'applied' })
-      // refresh dataset meta after apply
+      toast.success(`Applied to ${s.variable}`)
       const full = await api.getDataset(dataset.id)
       setDataset(full)
     } catch (err) {
-      alert('Apply failed: ' + err.message)
+      showError(err, 'Apply failed')
     }
   }
 

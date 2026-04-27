@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { api } from '../api'
+import { useErrorToast } from '../ui/Toast'
 
 const TESTS = [
   { key: 't', label: 'Independent t-test', needs: ['group', 'measure'] },
@@ -17,6 +18,7 @@ export default function TestsPage({ dataset }) {
   const [corrVars, setCorrVars] = useState([])
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const showError = useErrorToast()
 
   if (!dataset) return <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Upload a dataset first.</p>
 
@@ -35,7 +37,7 @@ export default function TestsPage({ dataset }) {
       const r = await api.runTest(dataset.id, body)
       setResult(r)
     } catch (err) {
-      alert('Test failed: ' + err.message)
+      showError(err, 'Test failed')
     } finally {
       setLoading(false)
     }

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useTheme } from '../theme'
+import { useToast } from '../ui/Toast'
 
 const NAV = [
   {
@@ -41,6 +42,7 @@ export default function Sidebar() {
   const asideRef = useRef(null)
   const profileRef = useRef(null)
   const { isDark, toggle } = useTheme()
+  const toast = useToast()
 
   useEffect(() => {
     if (!dragging) return
@@ -76,13 +78,13 @@ export default function Sidebar() {
 
   const handleSettings = useCallback(() => {
     setMenuOpen(false)
-    alert('Settings — coming soon')
-  }, [])
+    toast.info('Settings — coming soon')
+  }, [toast])
 
   const handleLogout = useCallback(() => {
     setMenuOpen(false)
-    alert('Log out — not implemented yet')
-  }, [])
+    toast.info('Log out — not implemented yet')
+  }, [toast])
 
   return (
     <aside ref={asideRef} className="ax-sidebar" style={{ width }}>

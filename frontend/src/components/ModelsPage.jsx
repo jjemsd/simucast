@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { Bar } from 'react-chartjs-2'
 import { api } from '../api'
+import { useToast, useErrorToast } from '../ui/Toast'
+import { useConfirm } from '../ui/Confirm'
 
 const ALGOS = [
   { key: 'logistic', label: 'Logistic regression' },
@@ -16,10 +18,14 @@ export default function ModelsPage({ dataset, setActiveModel, onGo }) {
   const [models, setModels] = useState([])
   const [latest, setLatest] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [busyId, setBusyId] = useState(null)
+  const toast = useToast()
+  const showError = useErrorToast()
+  const confirm = useConfirm()
 
   useEffect(() => {
     if (!dataset) return
-    api.listModels(dataset.id).then(setModels).catch(console.error)
+    api.listModels(dataset.id).then(setModels).catch((err) => showError(err, 'Could not load models'))
   }, [dataset?.id])
 
   if (!dataset) return <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Upload a dataset first.</p>
@@ -32,7 +38,10 @@ export default function ModelsPage({ dataset, setActiveModel, onGo }) {
   }
 
   const train = async () => {
-    if (!target) return alert('Pick a target variable')
+    if (!target) {
+      toast.warning('Pick a target variable first')
+      return
+    }
     setLoading(true)
     try {
       const r = await api.trainModel(dataset.id, {
@@ -41,12 +50,34 @@ export default function ModelsPage({ dataset, setActiveModel, onGo }) {
         algorithm: algo,
       })
       setLatest(r)
+      toast.success(`Trained ${r.algorithm} model on ${r.target}`)
       const list = await api.listModels(dataset.id)
       setModels(list)
     } catch (err) {
-      alert('Training failed: ' + err.message)
+      showError(err, 'Training failed')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleDelete = async (m) => {
+    const ok = await confirm({
+      title: `Delete this model?`,
+      message: `${m.algorithm} predicting ${m.target}. This cannot be undone.`,
+      confirmLabel: 'Delete model',
+      danger: true,
+    })
+    if (!ok) return
+    setBusyId(m.id)
+    try {
+      await api.deleteModel(m.id)
+      setModels((list) => list.filter((x) => x.id !== m.id))
+      if (latest?.id === m.id) setLatest(null)
+      toast.success('Model deleted')
+    } catch (err) {
+      showError(err, 'Delete failed')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -97,7 +128,7 @@ export default function ModelsPage({ dataset, setActiveModel, onGo }) {
           <p className="ax-lbl" style={{ marginTop: 20 }}>Previous models</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {models.map((m) => (
-              <div key={m.id} className="ax-card" style={{ padding: '10px 12px' }}>
+              <div key={m.id} className="ax-card" style={{ padding: '10px 12px', opacity: busyId === m.id ? 0.5 : 1 }}>
                 <div className="ax-row">
                   <div>
                     <p style={{ fontSize: 12, fontWeight: 500, margin: 0 }}>{m.algorithm} · {m.target}</p>
@@ -105,9 +136,19 @@ export default function ModelsPage({ dataset, setActiveModel, onGo }) {
                       {formatMetrics(m.metrics)}
                     </p>
                   </div>
-                  {m.has_whatif && (
-                    <button className="ax-btn" onClick={() => useInWhatIf(m)}>Use in what-if →</button>
-                  )}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {m.has_whatif && (
+                      <button className="ax-btn" onClick={() => useInWhatIf(m)}>Use in what-if →</button>
+                    )}
+                    <button
+                      className="ax-btn"
+                      onClick={() => handleDelete(m)}
+                      disabled={busyId === m.id}
+                      style={{ color: 'var(--color-text-danger)' }}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

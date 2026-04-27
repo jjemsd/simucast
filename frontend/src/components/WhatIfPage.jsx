@@ -1,31 +1,37 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useErrorToast } from '../ui/Toast'
 
 export default function WhatIfPage({ dataset, activeModel, setActiveModel }) {
   const [modelFull, setModelFull] = useState(null)
   const [inputs, setInputs] = useState({})
   const [pred, setPred] = useState(null)
   const [baseline, setBaseline] = useState(null)
+  const showError = useErrorToast()
 
   useEffect(() => {
     if (!activeModel) return
-    api.getModel(activeModel.id).then((m) => {
-      setModelFull(m)
-      // initialize inputs to the means
-      const init = {}
-      for (const f of m.whatif_features || []) {
-        init[f.name] = f.mean
-      }
-      setInputs(init)
-    })
+    api.getModel(activeModel.id)
+      .then((m) => {
+        setModelFull(m)
+        const init = {}
+        for (const f of m.whatif_features || []) init[f.name] = f.mean
+        setInputs(init)
+      })
+      .catch((err) => showError(err, 'Could not load model'))
   }, [activeModel?.id])
 
   useEffect(() => {
     if (!modelFull || !Object.keys(inputs).length) return
-    api.predict(modelFull.id, inputs).then((p) => {
-      setPred(p)
-      if (!baseline) setBaseline(p)
-    }).catch(console.error)
+    let cancelled = false
+    api.predict(modelFull.id, inputs)
+      .then((p) => {
+        if (cancelled) return
+        setPred(p)
+        if (!baseline) setBaseline(p)
+      })
+      .catch((err) => !cancelled && showError(err, 'Prediction failed'))
+    return () => { cancelled = true }
   }, [inputs, modelFull?.id])
 
   if (!dataset) return <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Upload a dataset first.</p>

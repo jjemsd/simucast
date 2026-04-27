@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useErrorToast } from '../ui/Toast'
 
 export default function FilesPage() {
   const [datasets, setDatasets] = useState([])
+  const showError = useErrorToast()
 
   useEffect(() => {
-    api.listDatasets().then(setDatasets).catch(console.error)
+    api.listDatasets()
+      .then(setDatasets)
+      .catch((err) => showError(err, 'Could not load files'))
   }, [])
 
   return (

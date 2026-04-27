@@ -1,16 +1,30 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import { useToast, useErrorToast } from '../ui/Toast'
+import { useConfirm } from '../ui/Confirm'
 
 export default function ProjectsPage() {
   const [datasets, setDatasets] = useState([])
+  const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [busyId, setBusyId] = useState(null)
   const fileRef = useRef(null)
   const navigate = useNavigate()
+  const toast = useToast()
+  const showError = useErrorToast()
+  const confirm = useConfirm()
 
-  useEffect(() => {
-    api.listDatasets().then(setDatasets).catch(console.error)
-  }, [])
+  const refresh = () => {
+    setLoading(true)
+    api
+      .listDatasets()
+      .then(setDatasets)
+      .catch((err) => showError(err, 'Could not load projects'))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(refresh, [])
 
   const handleUpload = async (e) => {
     const f = e.target.files?.[0]
@@ -18,12 +32,35 @@ export default function ProjectsPage() {
     setUploading(true)
     try {
       const result = await api.uploadDataset(f)
+      toast.success(`Uploaded ${f.name}`)
       navigate(`/projects/${result.id}`)
     } catch (err) {
-      alert('Upload failed: ' + err.message)
+      showError(err, 'Upload failed')
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const handleDelete = async (d, e) => {
+    e.stopPropagation()
+    const ok = await confirm({
+      title: `Delete "${d.name}"?`,
+      message:
+        'This permanently removes the dataset along with every analysis and model trained on it. This cannot be undone.',
+      confirmLabel: 'Delete project',
+      danger: true,
+    })
+    if (!ok) return
+    setBusyId(d.id)
+    try {
+      await api.deleteDataset(d.id)
+      setDatasets((list) => list.filter((x) => x.id !== d.id))
+      toast.success(`Deleted ${d.name}`)
+    } catch (err) {
+      showError(err, 'Delete failed')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -58,7 +95,9 @@ export default function ProjectsPage() {
       </div>
 
       <p className="ax-lbl">All projects</p>
-      {datasets.length === 0 ? (
+      {loading ? (
+        <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Loading…</p>
+      ) : datasets.length === 0 ? (
         <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
           No projects yet. Upload a dataset to get started.
         </p>
@@ -68,7 +107,7 @@ export default function ProjectsPage() {
             <div
               key={d.id}
               className="ax-card"
-              style={{ padding: '10px 12px', cursor: 'pointer' }}
+              style={{ padding: '10px 12px', cursor: 'pointer', opacity: busyId === d.id ? 0.5 : 1 }}
               onClick={() => navigate(`/projects/${d.id}`)}
             >
               <div className="ax-row">
@@ -79,7 +118,17 @@ export default function ProjectsPage() {
                     {d.created_at && ` · ${new Date(d.created_at).toLocaleDateString()}`}
                   </p>
                 </div>
-                <button className="ax-btn">Open →</button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="ax-btn"
+                    onClick={(e) => handleDelete(d, e)}
+                    disabled={busyId === d.id}
+                    style={{ color: 'var(--color-text-danger)' }}
+                  >
+                    Delete
+                  </button>
+                  <button className="ax-btn">Open →</button>
+                </div>
               </div>
             </div>
           ))}

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Scatter, Bar } from 'react-chartjs-2'
 import { api } from '../api'
+import { useErrorToast } from '../ui/Toast'
 
 const CLUSTER_COLORS = ['#7F77DD', '#1D9E75', '#D85A30', '#D4537E', '#EF9F27', '#378ADD']
 
@@ -10,6 +11,7 @@ export default function AdvancedPage({ dataset }) {
   const [k, setK] = useState(4)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const showError = useErrorToast()
 
   if (!dataset) return <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Upload a dataset first.</p>
 
@@ -28,7 +30,7 @@ export default function AdvancedPage({ dataset }) {
       const r = await fn(dataset.id, body)
       setResult({ method, ...r })
     } catch (err) {
-      alert('Failed: ' + err.message)
+      showError(err, method === 'cluster' ? 'Clustering failed' : 'PCA failed')
     } finally {
       setLoading(false)
     }

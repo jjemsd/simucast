@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
+import { useErrorToast } from '../ui/Toast'
 
 export default function DashboardPage() {
   const [datasets, setDatasets] = useState([])
+  const showError = useErrorToast()
 
   useEffect(() => {
-    api.listDatasets().then(setDatasets).catch(console.error)
+    api.listDatasets()
+      .then(setDatasets)
+      .catch((err) => showError(err, 'Could not load projects'))
   }, [])
 
   const totalRows = datasets.reduce((acc, d) => acc + (d.row_count || 0), 0)

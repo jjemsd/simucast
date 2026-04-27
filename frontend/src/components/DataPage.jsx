@@ -1,16 +1,26 @@
 import React, { useState } from 'react'
 import { api } from '../api'
 import DataGridModal from './DataGridModal'
+import { useErrorToast } from '../ui/Toast'
 
 export default function DataPage({ dataset }) {
   const [showModal, setShowModal] = useState(false)
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiSuggestions, setAiSuggestions] = useState([])
+  const [aiBusy, setAiBusy] = useState(false)
+  const showError = useErrorToast()
 
   const askAi = async () => {
     if (!dataset || !aiPrompt.trim()) return
-    const r = await api.aiSuggest(dataset.id, aiPrompt)
-    setAiSuggestions(r.suggestions || [])
+    setAiBusy(true)
+    try {
+      const r = await api.aiSuggest(dataset.id, aiPrompt)
+      setAiSuggestions(r.suggestions || [])
+    } catch (err) {
+      showError(err, 'AI suggest failed')
+    } finally {
+      setAiBusy(false)
+    }
   }
 
   return (
@@ -53,8 +63,8 @@ export default function DataPage({ dataset }) {
             style={{ flex: 1 }}
             onKeyDown={(e) => e.key === 'Enter' && askAi()}
           />
-          <button className="ax-btn" onClick={askAi}>
-            Suggest
+          <button className="ax-btn" onClick={askAi} disabled={aiBusy}>
+            {aiBusy ? 'Thinking…' : 'Suggest'}
           </button>
         </div>
         {aiSuggestions.length > 0 && (
