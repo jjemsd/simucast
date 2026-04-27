@@ -60,6 +60,7 @@ class Dataset(Base):
     __tablename__ = "datasets"
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
     filename = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     row_count = Column(Integer, default=0)
@@ -100,7 +101,20 @@ def _ensure_schema():
     if _db_ready:
         return
     Base.metadata.create_all(engine)
+    _migrate_add_columns()
     _db_ready = True
+
+def _migrate_add_columns():
+    """Idempotently add columns that were introduced after the table was first
+    created. SQLAlchemy's create_all only creates tables, not new columns."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "datasets" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("datasets")}
+    if "description" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE datasets ADD COLUMN description TEXT"))
 
 def _try_init_at_startup(retries=6, delay=5):
     """Best-effort schema init at boot — swallow failures so we still start."""
@@ -235,6 +249,7 @@ def list_datasets():
         return jsonify([{
             "id": r.id,
             "name": r.name,
+            "description": r.description,
             "filename": r.filename,
             "row_count": r.row_count,
             "col_count": r.col_count,
@@ -250,6 +265,7 @@ def upload_dataset():
         return {"error": "no file"}, 400
     f = request.files["file"]
     name = request.form.get("name") or f.filename
+    description = (request.form.get("description") or "").strip() or None
 
     # read the file
     try:
@@ -271,6 +287,7 @@ def upload_dataset():
         ds = Dataset(
             id=ds_id,
             name=name,
+            description=description,
             filename=f.filename,
             row_count=len(df),
             col_count=len(df.columns),
@@ -282,6 +299,7 @@ def upload_dataset():
         return {
             "id": ds_id,
             "name": name,
+            "description": description,
             "row_count": len(df),
             "col_count": len(df.columns),
             "variables": variables,
@@ -300,6 +318,7 @@ def get_dataset(ds_id):
         return {
             "id": ds.id,
             "name": ds.name,
+            "description": ds.description,
             "filename": ds.filename,
             "row_count": ds.row_count,
             "col_count": ds.col_count,
