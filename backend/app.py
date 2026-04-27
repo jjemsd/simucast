@@ -65,8 +65,30 @@ class Dataset(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     row_count = Column(Integer, default=0)
     col_count = Column(Integer, default=0)
-    variables = _json_col()      # [{name, dtype, missing, unique}]
-    data = _json_col()           # [{col: val, ...}, ...] (for small datasets)
+    variables = _json_col()      # [{name, dtype, missing, unique}] of CURRENT stage
+    data = _json_col()           # original (stage-0) rows; never mutated
+    current_stage_id = Column(String, nullable=True)  # null = original
+
+class DatasetStage(Base):
+    """A versioned snapshot produced by a transformation (clean / merge / expand…).
+
+    Each stage records what produced it so the UI can render a timeline,
+    revert to it, or export it. The original upload is the implicit stage 0
+    and is not persisted here — it lives in Dataset.data.
+    """
+    __tablename__ = "dataset_stages"
+    id = Column(String, primary_key=True)
+    dataset_id = Column(String, nullable=False, index=True)
+    parent_stage_id = Column(String, nullable=True)
+    step_index = Column(Integer, default=0)
+    op_type = Column(String)                  # 'clean', 'merge', 'rename', 'drop', 'expand', ...
+    op_params = _json_col()                   # the payload that produced this stage
+    summary = Column(Text)                    # one-line human / AI explanation
+    row_count = Column(Integer, default=0)
+    col_count = Column(Integer, default=0)
+    variables = _json_col()
+    data = _json_col()
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class Analysis(Base):
     __tablename__ = "analyses"
@@ -112,9 +134,11 @@ def _migrate_add_columns():
     if "datasets" not in insp.get_table_names():
         return
     cols = {c["name"] for c in insp.get_columns("datasets")}
-    if "description" not in cols:
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        if "description" not in cols:
             conn.execute(text("ALTER TABLE datasets ADD COLUMN description TEXT"))
+        if "current_stage_id" not in cols:
+            conn.execute(text("ALTER TABLE datasets ADD COLUMN current_stage_id VARCHAR"))
 
 def _try_init_at_startup(retries=6, delay=5):
     """Best-effort schema init at boot — swallow failures so we still start."""
@@ -150,12 +174,101 @@ def jdump(v):
         return v  # JSONB handles dicts/lists natively
     return json.dumps(v, default=str)
 
-def df_from_dataset(ds):
-    """Rehydrate a pandas DataFrame from a Dataset row."""
-    rows = jload(ds.data) or []
+def df_from_dataset(ds, session=None):
+    """Rehydrate a pandas DataFrame from the dataset's *current* stage.
+
+    Falls back to the original data when no stage is active. Pass a session
+    when caller already has one to avoid opening a second connection.
+    """
+    rows = _current_rows(ds, session)
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows)
+
+def _current_rows(ds, session=None):
+    """Return the row list for the active stage (or the original)."""
+    if not ds.current_stage_id:
+        return jload(ds.data) or []
+    own = session is None
+    s = session or db()
+    try:
+        stage = s.query(DatasetStage).filter_by(id=ds.current_stage_id).first()
+        if not stage:
+            return jload(ds.data) or []
+        return jload(stage.data) or []
+    finally:
+        if own:
+            s.close()
+
+def _current_variables(ds, session=None):
+    """Variables payload for the active stage (or original)."""
+    if not ds.current_stage_id:
+        return jload(ds.variables) or []
+    own = session is None
+    s = session or db()
+    try:
+        stage = s.query(DatasetStage).filter_by(id=ds.current_stage_id).first()
+        if stage:
+            return jload(stage.variables) or []
+        return jload(ds.variables) or []
+    finally:
+        if own:
+            s.close()
+
+def _stage_count(ds_id, session):
+    """How many persisted stages does this dataset have? (excludes original)"""
+    return session.query(DatasetStage).filter_by(dataset_id=ds_id).count()
+
+def _rows_for_stage(ds, stage_id, session):
+    """Resolve a stage selector (None / 'current' / 'original' / uuid) to rows."""
+    if not stage_id or stage_id == "current":
+        return _current_rows(ds, session)
+    if stage_id == "original":
+        return jload(ds.data) or []
+    stage = session.query(DatasetStage).filter_by(id=stage_id, dataset_id=ds.id).first()
+    if not stage:
+        return _current_rows(ds, session)
+    return jload(stage.data) or []
+
+def _variables_for_stage(ds, stage_id, session):
+    if not stage_id or stage_id == "current":
+        return _current_variables(ds, session)
+    if stage_id == "original":
+        return jload(ds.variables) or []
+    stage = session.query(DatasetStage).filter_by(id=stage_id, dataset_id=ds.id).first()
+    if stage:
+        return jload(stage.variables) or []
+    return _current_variables(ds, session)
+
+def create_stage(session, ds, df, op_type, op_params, summary):
+    """Persist a new stage produced by a transformation and mark it current.
+
+    Re-infers variables from the resulting DataFrame so downstream pages
+    pick up new dtypes / dropped columns automatically. Note: ds.variables
+    stays at the *original* values; current variables are read via the stage.
+    """
+    variables = infer_variables(df)
+    records = clean_json(df.where(pd.notnull(df), None).to_dict(orient="records"))
+    parent_id = ds.current_stage_id  # may be None (original)
+    stage = DatasetStage(
+        id=str(uuid.uuid4()),
+        dataset_id=ds.id,
+        parent_stage_id=parent_id,
+        step_index=_stage_count(ds.id, session) + 1,
+        op_type=op_type,
+        op_params=jdump(op_params),
+        summary=summary,
+        row_count=len(df),
+        col_count=len(df.columns),
+        variables=jdump(variables),
+        data=jdump(records),
+    )
+    session.add(stage)
+    ds.current_stage_id = stage.id
+    ds.row_count = len(df)
+    ds.col_count = len(df.columns)
+    session.commit()
+    return stage
 
 def infer_variables(df):
     """Produce variable metadata: name, dtype, missing, unique."""
@@ -219,6 +332,120 @@ def clean_json(obj):
     if pd.isna(obj) if np.isscalar(obj) else False:
         return None
     return obj
+
+# ========================================================================
+#  AI assistant (Anthropic)
+# ========================================================================
+# We talk to Claude through the official SDK and rely on prompt caching for
+# the dataset profile so repeat calls during a session are cheap. The key is
+# read from ANTHROPIC_API_KEY at request time so the server still boots
+# (and serves non-AI endpoints) when the key is unset.
+
+_AI_MODEL_FAST = "claude-sonnet-4-6"
+_AI_MODEL_DEEP = "claude-opus-4-7"
+
+def _ai_client():
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        import anthropic  # local import keeps optional dep optional
+    except ImportError:
+        return None
+    return anthropic.Anthropic(api_key=key)
+
+def _dataset_profile(ds, df, variables, max_unique=8):
+    """Compact, deterministic dataset summary for AI prompts.
+
+    Used as a cacheable prompt prefix so we're not paying for the whole row
+    payload on every call. Only metadata + small samples — never the full
+    dataset.
+    """
+    cols = []
+    for v in variables or []:
+        col = {
+            "name": v["name"],
+            "dtype": v.get("dtype"),
+            "missing": v.get("missing"),
+            "unique": v.get("unique"),
+        }
+        if v["name"] in df.columns:
+            series = df[v["name"]]
+            present = series.dropna()
+            if v.get("dtype") in ("category", "binary") and len(present):
+                vc = present.value_counts().head(max_unique)
+                col["top_values"] = [
+                    {"value": _ai_safe(k), "count": int(c)} for k, c in vc.items()
+                ]
+            elif v.get("dtype") == "numeric" and len(present):
+                num = pd.to_numeric(present, errors="coerce").dropna()
+                if len(num):
+                    col["min"] = float(num.min())
+                    col["max"] = float(num.max())
+                    col["mean"] = round(float(num.mean()), 4)
+        cols.append(col)
+    return {
+        "name": ds.name,
+        "description": ds.description,
+        "filename": ds.filename,
+        "row_count": int(len(df)),
+        "col_count": int(len(df.columns)),
+        "columns": cols,
+    }
+
+def _ai_safe(v):
+    if v is None:
+        return None
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        return float(v)
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
+
+def ai_call(profile, user_prompt, system=None, model=_AI_MODEL_FAST, max_tokens=1024, json_mode=False):
+    """Make an AI call with the dataset profile cached as a prompt prefix.
+
+    Returns the text response (or a dict if json_mode=True). Raises a clear
+    error when the SDK / key is missing so the route can surface 503.
+    """
+    client = _ai_client()
+    if client is None:
+        raise RuntimeError("AI assistant unavailable: set ANTHROPIC_API_KEY on the API service")
+
+    sys_blocks = []
+    if system:
+        sys_blocks.append({"type": "text", "text": system})
+    sys_blocks.append({
+        "type": "text",
+        "text": "Dataset profile (use as the source of truth):\n" + json.dumps(profile, default=str),
+        "cache_control": {"type": "ephemeral"},
+    })
+    if json_mode:
+        sys_blocks.append({
+            "type": "text",
+            "text": "Respond with a single JSON object only — no prose, no markdown fences.",
+        })
+
+    msg = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=sys_blocks,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    text = "".join(block.text for block in msg.content if getattr(block, "type", None) == "text")
+    if json_mode:
+        try:
+            return json.loads(text)
+        except Exception:
+            # tolerate stray fences
+            cleaned = text.strip().strip("`")
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:].strip()
+            return json.loads(cleaned)
+    return text
+
 
 # ========================================================================
 #  Routes
@@ -329,7 +556,7 @@ def upload_dataset():
 
 @app.route("/api/datasets/<ds_id>", methods=["GET"])
 def get_dataset(ds_id):
-    """Returns dataset metadata + variables."""
+    """Returns dataset metadata + variables for the active stage."""
     s = db()
     try:
         ds = s.query(Dataset).filter_by(id=ds_id).first()
@@ -342,7 +569,8 @@ def get_dataset(ds_id):
             "filename": ds.filename,
             "row_count": ds.row_count,
             "col_count": ds.col_count,
-            "variables": jload(ds.variables),
+            "variables": _current_variables(ds, s),
+            "current_stage_id": ds.current_stage_id,
             "created_at": ds.created_at.isoformat() if ds.created_at else None,
         }
     finally:
@@ -350,15 +578,19 @@ def get_dataset(ds_id):
 
 @app.route("/api/datasets/<ds_id>/rows", methods=["GET"])
 def get_rows(ds_id):
-    """Paginated row data for the Excel-like grid."""
+    """Paginated row data for the Excel-like grid.
+
+    Optional ?stage_id=original|<uuid> selects a specific stage.
+    """
     page = max(_parse_num(request.args.get("page"), 1, int), 1)
     page_size = min(max(_parse_num(request.args.get("page_size"), 100, int), 1), 1000)
+    stage_id = request.args.get("stage_id")
     s = db()
     try:
         ds = s.query(Dataset).filter_by(id=ds_id).first()
         if not ds:
             return {"error": "not found"}, 404
-        rows = jload(ds.data) or []
+        rows = _rows_for_stage(ds, stage_id, s)
         start = (page - 1) * page_size
         end = start + page_size
         return {
@@ -366,9 +598,114 @@ def get_rows(ds_id):
             "page": page,
             "page_size": page_size,
             "total": len(rows),
+            "stage_id": stage_id or ds.current_stage_id or "original",
         }
     finally:
         s.close()
+
+# --- Stages (data versioning) ---
+
+@app.route("/api/datasets/<ds_id>/stages", methods=["GET"])
+def list_stages(ds_id):
+    """Return all stages plus the implicit 'original' so the UI can render
+    a timeline. The frontend marks the current stage by id."""
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        stages = (
+            s.query(DatasetStage)
+            .filter_by(dataset_id=ds_id)
+            .order_by(DatasetStage.step_index)
+            .all()
+        )
+        original = {
+            "id": "original",
+            "step_index": 0,
+            "op_type": "upload",
+            "summary": f"Original upload — {ds.row_count} rows · {ds.col_count} columns",
+            "row_count": ds.row_count if not stages else jload(ds.data).__len__() if ds.data else 0,
+            "col_count": ds.col_count if not stages else (len(jload(ds.variables) or []) if ds.variables else 0),
+            "created_at": ds.created_at.isoformat() if ds.created_at else None,
+        }
+        # the row_count/col_count for original should reflect the upload, not current
+        if stages:
+            orig_rows = jload(ds.data) or []
+            original["row_count"] = len(orig_rows)
+            original["col_count"] = len(orig_rows[0]) if orig_rows else 0
+        return {
+            "current_stage_id": ds.current_stage_id or "original",
+            "stages": [original] + [
+                {
+                    "id": st.id,
+                    "step_index": st.step_index,
+                    "op_type": st.op_type,
+                    "op_params": jload(st.op_params),
+                    "summary": st.summary,
+                    "row_count": st.row_count,
+                    "col_count": st.col_count,
+                    "created_at": st.created_at.isoformat() if st.created_at else None,
+                }
+                for st in stages
+            ],
+        }
+    finally:
+        s.close()
+
+@app.route("/api/datasets/<ds_id>/stages/<stage_id>/restore", methods=["POST"])
+def restore_stage(ds_id, stage_id):
+    """Set a previous stage as the current one (revert)."""
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        if stage_id == "original":
+            ds.current_stage_id = None
+            rows = jload(ds.data) or []
+            ds.row_count = len(rows)
+            ds.col_count = len(rows[0]) if rows else 0
+        else:
+            stage = s.query(DatasetStage).filter_by(id=stage_id, dataset_id=ds_id).first()
+            if not stage:
+                return {"error": "stage not found"}, 404
+            ds.current_stage_id = stage.id
+            ds.row_count = stage.row_count
+            ds.col_count = stage.col_count
+        s.commit()
+        return {"ok": True, "current_stage_id": ds.current_stage_id or "original"}
+    finally:
+        s.close()
+
+@app.route("/api/datasets/<ds_id>/export.csv", methods=["GET"])
+def export_csv(ds_id):
+    """Stream the active stage (or any stage selected via ?stage_id=) as CSV."""
+    from flask import Response
+    stage_id = request.args.get("stage_id")
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        rows = _rows_for_stage(ds, stage_id, s)
+        if not rows:
+            df = pd.DataFrame()
+        else:
+            df = pd.DataFrame(rows)
+        buf = df.to_csv(index=False)
+        suffix = stage_id or ds.current_stage_id or "original"
+        suffix_label = "original" if suffix == "original" else f"stage-{suffix[:8]}"
+        safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in (ds.name or "dataset"))
+        fname = f"{safe_name}__{suffix_label}.csv"
+        return Response(
+            buf,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    finally:
+        s.close()
+
 
 @app.route("/api/datasets/<ds_id>/columns/<col_name>/values", methods=["GET"])
 def get_column_values(ds_id, col_name):
@@ -380,7 +717,7 @@ def get_column_values(ds_id, col_name):
         ds = s.query(Dataset).filter_by(id=ds_id).first()
         if not ds:
             return {"error": "not found"}, 404
-        rows = jload(ds.data) or []
+        rows = _current_rows(ds, s)
         if rows and col_name not in rows[0]:
             return {"error": "column not found"}, 404
         start = (page - 1) * page_size
@@ -590,7 +927,11 @@ def clean_suggestions(ds_id):
 
 @app.route("/api/datasets/<ds_id>/clean/apply", methods=["POST"])
 def clean_apply(ds_id):
-    """Apply a cleaning operation: impute, winsorize, convert, drop."""
+    """Apply a cleaning operation: impute, winsorize, convert, drop.
+
+    Each successful op produces a new DatasetStage so the original data is
+    preserved and the user can revert or export any prior stage.
+    """
     body = request.get_json() or {}
     action = body.get("action")
     variable = body.get("variable")
@@ -599,44 +940,60 @@ def clean_apply(ds_id):
         ds = s.query(Dataset).filter_by(id=ds_id).first()
         if not ds:
             return {"error": "not found"}, 404
-        df = df_from_dataset(ds)
+        df = df_from_dataset(ds, s)
+        before_rows = len(df)
+        summary = ""
 
         if action == "impute" and variable in df.columns:
+            missing_before = int(df[variable].isna().sum())
             if pd.api.types.is_numeric_dtype(df[variable]):
-                df[variable] = df[variable].fillna(df[variable].mean())
+                fill = df[variable].mean()
+                df[variable] = df[variable].fillna(fill)
+                summary = f"Imputed {missing_before} missing values in '{variable}' with mean ({fill:.4g})"
             else:
                 mode = df[variable].mode()
-                df[variable] = df[variable].fillna(mode[0] if len(mode) else "")
+                fill = mode[0] if len(mode) else ""
+                df[variable] = df[variable].fillna(fill)
+                summary = f"Imputed {missing_before} missing values in '{variable}' with mode ({fill!r})"
         elif action == "mode" and variable in df.columns:
+            missing_before = int(df[variable].isna().sum())
             mode = df[variable].mode()
-            df[variable] = df[variable].fillna(mode[0] if len(mode) else "")
+            fill = mode[0] if len(mode) else ""
+            df[variable] = df[variable].fillna(fill)
+            summary = f"Imputed {missing_before} missing values in '{variable}' with mode ({fill!r})"
         elif action == "winsorize" and variable in df.columns:
             q1, q3 = df[variable].quantile([0.25, 0.75])
             iqr = q3 - q1
             lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+            clipped = int(((df[variable] < lo) | (df[variable] > hi)).sum())
             df[variable] = df[variable].clip(lower=lo, upper=hi)
+            summary = f"Winsorized '{variable}' to [{lo:.4g}, {hi:.4g}] (clipped {clipped} outlier rows)"
         elif action == "convert_date" and variable in df.columns:
             df[variable] = pd.to_datetime(df[variable], errors="coerce").astype(str)
+            summary = f"Converted '{variable}' to datetime"
         elif action == "drop_rows" and variable in df.columns:
             df = df.dropna(subset=[variable])
+            summary = f"Dropped {before_rows - len(df)} rows with missing '{variable}'"
         elif action == "expand":
-            # simple feature engineering: new column = numerator / denominator
             num = body.get("numerator")
             den = body.get("denominator")
             new_name = body.get("new_name") or f"{num}_per_{den}"
             if num in df.columns and den in df.columns:
                 df[new_name] = df[num] / df[den].replace(0, np.nan)
+                summary = f"Created '{new_name}' = {num} / {den}"
+            else:
+                return {"error": "expand: missing columns"}, 400
         else:
             return {"error": "unknown action or bad variable"}, 400
 
-        # persist
-        records = df.where(pd.notnull(df), None).to_dict(orient="records")
-        ds.data = jdump(clean_json(records))
-        ds.variables = jdump(infer_variables(df))
-        ds.row_count = len(df)
-        ds.col_count = len(df.columns)
-        s.commit()
-        return {"ok": True, "row_count": ds.row_count, "col_count": ds.col_count}
+        stage = create_stage(s, ds, df, op_type=action, op_params=body, summary=summary)
+        return {
+            "ok": True,
+            "row_count": ds.row_count,
+            "col_count": ds.col_count,
+            "stage_id": stage.id,
+            "summary": summary,
+        }
     finally:
         s.close()
 
@@ -1092,6 +1449,177 @@ def get_model(model_id):
         s.close()
 
 # --- AI assistant (simple rule-based; swap for Claude API later) ---
+
+@app.route("/api/datasets/<ds_id>/ai/recommend", methods=["POST"])
+def ai_recommend(ds_id):
+    """Context-aware AI recommendations for a page (data / tests / models / expand).
+
+    Returns a structured object the UI can render directly. Falls back to a
+    rule-based stub when the Anthropic key isn't configured so the panel
+    still shows something useful.
+    """
+    body = request.get_json() or {}
+    context = (body.get("context") or "data").lower()
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds, s)
+        variables = _current_variables(ds, s)
+        profile = _dataset_profile(ds, df, variables)
+
+        client = _ai_client()
+        if client is None:
+            return jsonify(_rule_based_recommend(context, df, variables))
+
+        system = (
+            "You are SimuCast's data-analysis assistant. You help non-experts "
+            "understand their dataset and decide the next step. Be concise, "
+            "concrete, and reference column names exactly as given. When you "
+            "recommend an action, explain WHY in one short sentence."
+        )
+        prompts = {
+            "data": (
+                "Look at the dataset profile and produce up to 6 recommendations "
+                "covering: (a) cleaning fixes that would matter most, (b) useful "
+                "column merges or feature engineering, (c) interesting questions "
+                "the user could answer with this data. "
+                'Respond as JSON: {"summary": str, "recommendations": [{"title": str, "rationale": str, "category": "clean|merge|expand|analyze|model"}]}'
+            ),
+            "tests": (
+                "Recommend up to 4 statistical tests appropriate for this dataset. "
+                "For each: name the test, the variables it would use (by exact column name), and a one-sentence rationale. "
+                'Respond as JSON: {"recommendations": [{"test": str, "variables": [str], "rationale": str}]}'
+            ),
+            "models": (
+                "Recommend up to 4 candidate target variables and the modeling "
+                "task type (classification / regression) for each. For each "
+                "target, list the algorithms you would try and any preprocessing "
+                "the user must understand (scaling, encoding, leakage risks). "
+                'Respond as JSON: {"recommendations": [{"target": str, "task": "classification|regression", "algorithms": [str], "preprocessing": [str], "leakage_risks": [str], "rationale": str}]}'
+            ),
+            "expand": (
+                "The dataset is small. Recommend a row-synthesis approach "
+                "(bootstrap vs synthetic) and a target row count, with the "
+                "trade-offs spelled out. "
+                'Respond as JSON: {"method": "bootstrap|synthetic", "target_rows": int, "rationale": str, "warnings": [str]}'
+            ),
+        }
+        prompt = prompts.get(context, prompts["data"])
+        try:
+            payload = ai_call(profile, prompt, system=system, json_mode=True, max_tokens=1500)
+            return jsonify({"context": context, "ai": True, **payload})
+        except Exception as e:
+            print(f"AI recommend failed: {e}", flush=True)
+            fallback = _rule_based_recommend(context, df, variables)
+            fallback["error"] = f"AI call failed: {e.__class__.__name__}"
+            return jsonify(fallback)
+    finally:
+        s.close()
+
+
+@app.route("/api/datasets/<ds_id>/ai/explain", methods=["POST"])
+def ai_explain(ds_id):
+    """Free-form 'explain this' for a step the UI is showing the user.
+
+    Body: {step: str, params: dict, question: str?}
+    """
+    body = request.get_json() or {}
+    step = body.get("step") or "step"
+    params = body.get("params") or {}
+    question = body.get("question") or "Explain what this step does and what to look out for."
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds, s)
+        variables = _current_variables(ds, s)
+        profile = _dataset_profile(ds, df, variables)
+
+        client = _ai_client()
+        if client is None:
+            return jsonify({
+                "ai": False,
+                "explanation": (
+                    f"AI explanations require an ANTHROPIC_API_KEY on the server. "
+                    f"Step: {step}. Params: {json.dumps(params, default=str)}."
+                ),
+            })
+
+        system = (
+            "You are SimuCast's data-analysis assistant. Explain steps in plain "
+            "English to a non-statistician, in 2–4 short sentences. Reference "
+            "specific columns from the dataset profile when relevant. Be honest "
+            "about caveats but don't hedge excessively."
+        )
+        prompt = (
+            f"User is on step '{step}' with params {json.dumps(params, default=str)}.\n"
+            f"Question: {question}"
+        )
+        try:
+            text = ai_call(profile, prompt, system=system, max_tokens=600)
+            return jsonify({"ai": True, "explanation": text})
+        except Exception as e:
+            print(f"AI explain failed: {e}", flush=True)
+            return jsonify({"ai": False, "explanation": f"AI call failed: {e}"})
+    finally:
+        s.close()
+
+
+def _rule_based_recommend(context, df, variables):
+    """Heuristic fallback when no Anthropic key is configured."""
+    var_by_name = {v["name"]: v for v in variables}
+    nums = [v["name"] for v in variables if v.get("dtype") in ("numeric", "binary")]
+    cats = [v["name"] for v in variables if v.get("dtype") == "category"]
+    bins = [v["name"] for v in variables if v.get("dtype") == "binary"]
+    missing_cols = [v["name"] for v in variables if v.get("missing", 0) > 0]
+    if context == "tests":
+        recs = []
+        if bins and nums:
+            recs.append({"test": "Independent t-test", "variables": [bins[0], nums[0]],
+                         "rationale": f"Compare mean {nums[0]} between {bins[0]} groups."})
+        if len(cats) >= 2:
+            recs.append({"test": "Chi-square", "variables": cats[:2],
+                         "rationale": "Test independence of two categorical variables."})
+        if len(nums) >= 2:
+            recs.append({"test": "Pearson correlation", "variables": nums[:2],
+                         "rationale": "Check linear association between two numeric variables."})
+        return {"context": "tests", "ai": False, "recommendations": recs}
+    if context == "models":
+        recs = []
+        if bins:
+            recs.append({"target": bins[0], "task": "classification",
+                         "algorithms": ["logistic", "random_forest", "gradient_boosting"],
+                         "preprocessing": ["scale numeric features", "one-hot encode categoricals"],
+                         "leakage_risks": [], "rationale": f"{bins[0]} is binary — natural classification target."})
+        if nums:
+            recs.append({"target": nums[-1], "task": "regression",
+                         "algorithms": ["linear", "random_forest"],
+                         "preprocessing": ["scale numeric features"],
+                         "leakage_risks": [], "rationale": f"{nums[-1]} is continuous."})
+        return {"context": "models", "ai": False, "recommendations": recs}
+    if context == "expand":
+        return {"context": "expand", "ai": False, "method": "bootstrap",
+                "target_rows": max(500, 2 * len(df)), "rationale": "Bootstrap is fast and assumption-free.",
+                "warnings": ["Bootstrap rows are duplicates of originals — don't use for held-out evaluation."]}
+    # default = data
+    recs = []
+    for col in missing_cols[:3]:
+        recs.append({"title": f"Handle missing values in '{col}'",
+                     "rationale": f"{var_by_name[col]['missing']} rows are blank.",
+                     "category": "clean"})
+    if bins and nums:
+        recs.append({"title": f"Compare {nums[0]} across {bins[0]} groups",
+                     "rationale": "Useful baseline analysis.", "category": "analyze"})
+    if bins:
+        recs.append({"title": f"Predict {bins[0]} from the other columns",
+                     "rationale": "Binary target — good classification candidate.", "category": "model"})
+    return {"context": "data", "ai": False,
+            "summary": "Heuristic recommendations (no AI key configured).",
+            "recommendations": recs}
+
 
 @app.route("/api/datasets/<ds_id>/ai/suggest", methods=["POST"])
 def ai_suggest(ds_id):

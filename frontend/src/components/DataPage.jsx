@@ -2,17 +2,30 @@ import React, { useState } from 'react'
 import { api } from '../api'
 import DataGridModal from './DataGridModal'
 import ColumnValuesModal from './ColumnValuesModal'
+import StageTimeline from './StageTimeline'
 
-export default function DataPage({ dataset }) {
-  const [showModal, setShowModal] = useState(false)
+export default function DataPage({ dataset, setDataset }) {
+  const [viewStageId, setViewStageId] = useState(null)
+  const [viewStageLabel, setViewStageLabel] = useState(null)
   const [activeVar, setActiveVar] = useState(null)
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiSuggestions, setAiSuggestions] = useState([])
+  const [historyKey, setHistoryKey] = useState(0)
 
   const askAi = async () => {
     if (!dataset || !aiPrompt.trim()) return
     const r = await api.aiSuggest(dataset.id, aiPrompt)
     setAiSuggestions(r.suggestions || [])
+  }
+
+  const refreshDataset = async () => {
+    try {
+      const fresh = await api.getDataset(dataset.id)
+      setDataset?.(fresh)
+      setHistoryKey((k) => k + 1)
+    } catch (err) {
+      console.error('Failed to refresh dataset', err)
+    }
   }
 
   return (
@@ -30,9 +43,25 @@ export default function DataPage({ dataset }) {
               Browse the full dataset in an Excel-style grid.
             </p>
           </div>
-          <button className="ax-btn prim" onClick={() => setShowModal(true)}>
-            View data grid
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <a
+              className="ax-btn"
+              href={api.exportCsvUrl(dataset.id)}
+              download
+              style={{ textDecoration: 'none' }}
+            >
+              Download CSV
+            </a>
+            <button
+              className="ax-btn prim"
+              onClick={() => {
+                setViewStageId('current')
+                setViewStageLabel(null)
+              }}
+            >
+              View data grid
+            </button>
+          </div>
         </div>
       </div>
 
@@ -78,6 +107,23 @@ export default function DataPage({ dataset }) {
         )}
       </div>
 
+      <p className="ax-lbl">Data history</p>
+      <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', margin: '0 0 6px' }}>
+        Every cleaning, merge, or expansion creates a new stage. Original data is always preserved
+        and can be viewed or exported at any time.
+      </p>
+      <div style={{ marginBottom: 16 }}>
+        <StageTimeline
+          datasetId={dataset.id}
+          refreshKey={historyKey}
+          onView={(stageId) => {
+            setViewStageId(stageId)
+            setViewStageLabel(stageId === 'original' ? 'Original upload' : `Stage ${stageId.slice(0, 8)}`)
+          }}
+          onRestored={refreshDataset}
+        />
+      </div>
+
       <p className="ax-lbl">Variables</p>
       <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', margin: '0 0 6px' }}>
         Click a row to view all entries for that variable.
@@ -111,11 +157,16 @@ export default function DataPage({ dataset }) {
         </table>
       </div>
 
-      {showModal && (
+      {viewStageId && (
         <DataGridModal
           datasetId={dataset.id}
           variables={dataset.variables || []}
-          onClose={() => setShowModal(false)}
+          stageId={viewStageId === 'current' ? null : viewStageId}
+          stageLabel={viewStageLabel}
+          onClose={() => {
+            setViewStageId(null)
+            setViewStageLabel(null)
+          }}
         />
       )}
       {activeVar && (
