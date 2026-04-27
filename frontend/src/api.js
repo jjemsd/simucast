@@ -45,6 +45,8 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  columnStats: (dsId, colName) =>
+    request(`/api/datasets/${dsId}/columns/${encodeURIComponent(colName)}/stats`),
 
   // cleaning
   cleanSuggestions: (id) => request(`/api/datasets/${id}/clean/suggestions`),

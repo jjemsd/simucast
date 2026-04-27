@@ -373,6 +373,110 @@ def update_variable(ds_id, var_name):
 
 # --- Cleaning ---
 
+@app.route("/api/datasets/<ds_id>/columns/<col_name>/stats", methods=["GET"])
+def column_stats(ds_id, col_name):
+    """Per-column profiling stats: dtype, missing, errors, zeros, value counts, etc."""
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds)
+        if col_name not in df.columns:
+            return {"error": "column not found"}, 404
+
+        variables = jload(ds.variables) or []
+        var = next((v for v in variables if v["name"] == col_name), None)
+        dtype = var["dtype"] if var else "text"
+
+        series = df[col_name]
+        total = int(len(series))
+        missing = int(series.isna().sum())
+        present = series.dropna()
+        unique = int(present.nunique())
+
+        out = {
+            "name": col_name,
+            "dtype": dtype,
+            "total_rows": total,
+            "missing": missing,
+            "missing_pct": round(missing / total * 100, 2) if total else 0,
+            "present": int(len(present)),
+            "unique": unique,
+        }
+
+        # type-error count: values that don't match the declared dtype
+        type_errors = 0
+        if dtype in ("numeric", "binary"):
+            coerced = pd.to_numeric(present, errors="coerce")
+            type_errors = int(coerced.isna().sum())
+        elif dtype == "datetime":
+            coerced = pd.to_datetime(present, errors="coerce")
+            type_errors = int(coerced.isna().sum())
+        out["type_errors"] = type_errors
+
+        if dtype in ("numeric", "binary"):
+            num = pd.to_numeric(present, errors="coerce").dropna()
+            zeros = int((num == 0).sum())
+            out["zero_count"] = zeros
+            out["zero_pct"] = round(zeros / total * 100, 2) if total else 0
+            out["negative_count"] = int((num < 0).sum())
+            if len(num):
+                out["min"] = float(num.min())
+                out["max"] = float(num.max())
+                out["mean"] = float(num.mean())
+                out["median"] = float(num.median())
+                out["std"] = float(num.std()) if len(num) > 1 else 0.0
+            if dtype == "binary" or unique <= 10:
+                vc = num.value_counts().head(10)
+                out["value_counts"] = [
+                    {"value": _json_safe(k), "count": int(v), "pct": round(int(v) / total * 100, 2)}
+                    for k, v in vc.items()
+                ]
+
+        elif dtype in ("category", "text"):
+            empty_strings = int((present.astype(str).str.strip() == "").sum())
+            out["empty_string_count"] = empty_strings
+            vc = present.value_counts().head(20)
+            out["value_counts"] = [
+                {"value": _json_safe(k), "count": int(v), "pct": round(int(v) / total * 100, 2)}
+                for k, v in vc.items()
+            ]
+            lens = present.astype(str).str.len()
+            if len(lens):
+                out["min_length"] = int(lens.min())
+                out["max_length"] = int(lens.max())
+                out["avg_length"] = round(float(lens.mean()), 1)
+
+        elif dtype == "datetime":
+            parsed = pd.to_datetime(present, errors="coerce").dropna()
+            if len(parsed):
+                out["min"] = parsed.min().isoformat()
+                out["max"] = parsed.max().isoformat()
+
+        return out
+    finally:
+        s.close()
+
+
+def _json_safe(v):
+    """Convert a pandas/numpy scalar into a JSON-serializable value."""
+    if v is None:
+        return None
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        f = float(v)
+        if f.is_integer():
+            return int(f)
+        return round(f, 4)
+    if isinstance(v, (np.bool_,)):
+        return bool(v)
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
+
+
 @app.route("/api/datasets/<ds_id>/clean/suggestions", methods=["GET"])
 def clean_suggestions(ds_id):
     """AI-style suggestions: missing, outliers, type issues, engineering."""

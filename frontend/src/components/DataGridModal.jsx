@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 
 /**
@@ -66,10 +66,7 @@ export default function DataGridModal({ datasetId, variables, onClose }) {
                       <tr>
                         <th className="ax-grid-row-num-head">#</th>
                         {variables.map((v) => (
-                          <th key={v.name}>
-                            {v.name}
-                            <span className="ax-grid-type">{v.dtype}</span>
-                          </th>
+                          <ColumnHeader key={v.name} datasetId={datasetId} variable={v} />
                         ))}
                       </tr>
                     </thead>
@@ -159,6 +156,142 @@ export default function DataGridModal({ datasetId, variables, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function ColumnHeader({ datasetId, variable }) {
+  const [open, setOpen] = useState(false)
+  const [stats, setStats] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && !stats && !loading) {
+      setLoading(true)
+      setError(null)
+      api
+        .columnStats(datasetId, variable.name)
+        .then(setStats)
+        .catch((err) => setError(err.message || 'Failed to load stats'))
+        .finally(() => setLoading(false))
+    }
+  }
+
+  return (
+    <th style={{ position: 'relative' }} ref={ref}>
+      <button
+        type="button"
+        onClick={toggle}
+        className="ax-grid-head-btn"
+        aria-expanded={open}
+        aria-label={`Show stats for ${variable.name}`}
+      >
+        <span className="ax-grid-head-name">{variable.name}</span>
+        <span className="ax-grid-head-caret" aria-hidden>▾</span>
+      </button>
+      <span className="ax-grid-type">{variable.dtype}</span>
+      {open && (
+        <div className="ax-col-popover" onClick={(e) => e.stopPropagation()}>
+          {loading && <p className="ax-col-pop-msg">Loading…</p>}
+          {error && <p className="ax-col-pop-msg" style={{ color: 'var(--color-text-danger)' }}>{error}</p>}
+          {stats && <ColumnStatsBody stats={stats} />}
+        </div>
+      )}
+    </th>
+  )
+}
+
+function ColumnStatsBody({ stats }) {
+  const fmtNum = (n) => {
+    if (n === null || n === undefined) return '—'
+    if (Number.isInteger(n)) return n.toLocaleString()
+    return Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 })
+  }
+
+  return (
+    <>
+      <div className="ax-col-pop-head">
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 500 }}>{stats.name}</span>
+        <span
+          className="ax-chip"
+          style={{
+            background: dtypeColor(stats.dtype).bg,
+            color: dtypeColor(stats.dtype).fg,
+          }}
+        >
+          {stats.dtype}
+        </span>
+      </div>
+
+      <dl className="ax-col-pop-list">
+        <Row label="Rows" value={stats.total_rows.toLocaleString()} />
+        <Row label="Present" value={stats.present.toLocaleString()} />
+        <Row label="Missing" value={`${stats.missing.toLocaleString()} (${stats.missing_pct}%)`} warn={stats.missing > 0} />
+        <Row label="Errors" value={stats.type_errors.toLocaleString()} warn={stats.type_errors > 0} hint="values not matching the data type" />
+        <Row label="Unique" value={stats.unique.toLocaleString()} />
+        {'zero_count' in stats && (
+          <Row label="Zeros" value={`${stats.zero_count.toLocaleString()} (${stats.zero_pct}%)`} />
+        )}
+        {'negative_count' in stats && stats.negative_count > 0 && (
+          <Row label="Negatives" value={stats.negative_count.toLocaleString()} />
+        )}
+        {'empty_string_count' in stats && stats.empty_string_count > 0 && (
+          <Row label="Empty strings" value={stats.empty_string_count.toLocaleString()} warn />
+        )}
+        {'min' in stats && <Row label="Min" value={typeof stats.min === 'string' ? stats.min : fmtNum(stats.min)} />}
+        {'max' in stats && <Row label="Max" value={typeof stats.max === 'string' ? stats.max : fmtNum(stats.max)} />}
+        {'mean' in stats && <Row label="Mean" value={fmtNum(stats.mean)} />}
+        {'median' in stats && <Row label="Median" value={fmtNum(stats.median)} />}
+        {'std' in stats && <Row label="Std dev" value={fmtNum(stats.std)} />}
+        {'min_length' in stats && (
+          <Row label="Length" value={`${stats.min_length}–${stats.max_length} (avg ${stats.avg_length})`} />
+        )}
+      </dl>
+
+      {stats.value_counts && stats.value_counts.length > 0 && (
+        <div className="ax-col-pop-section">
+          <p className="ax-col-pop-section-title">
+            {stats.dtype === 'category' || stats.dtype === 'binary' ? 'Categories' : 'Top values'}
+          </p>
+          <div className="ax-col-pop-bars">
+            {stats.value_counts.map((row, i) => (
+              <div key={i} className="ax-col-pop-bar">
+                <span className="ax-col-pop-bar-label" title={String(row.value ?? '—')}>
+                  {row.value === null || row.value === '' ? '—' : String(row.value)}
+                </span>
+                <span className="ax-col-pop-bar-track">
+                  <span className="ax-col-pop-bar-fill" style={{ width: `${Math.min(100, row.pct)}%` }} />
+                </span>
+                <span className="ax-col-pop-bar-count">
+                  {row.count.toLocaleString()} <span style={{ color: 'var(--color-text-tertiary)' }}>({row.pct}%)</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function Row({ label, value, warn, hint }) {
+  return (
+    <div className="ax-col-pop-row">
+      <dt title={hint || undefined}>{label}</dt>
+      <dd className={warn ? 'warn' : ''}>{value}</dd>
     </div>
   )
 }

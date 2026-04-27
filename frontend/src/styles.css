@@ -532,6 +532,134 @@ input[type="range"]::-moz-range-thumb {
   font-style: italic;
 }
 
+/* --- column header dropdown --- */
+.ax-grid-head-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.ax-grid-head-btn:hover .ax-grid-head-caret {
+  color: var(--color-text-primary);
+}
+.ax-grid-head-name {
+  font-weight: 500;
+}
+.ax-grid-head-caret {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+}
+.ax-col-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  width: 320px;
+  max-height: 480px;
+  overflow: auto;
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 12px;
+  z-index: 10;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  white-space: normal;
+  text-transform: none;
+}
+.ax-col-pop-msg {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+.ax-col-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+}
+.ax-col-pop-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  margin: 0 0 4px;
+  font-size: 11.5px;
+}
+.ax-col-pop-row {
+  display: contents;
+}
+.ax-col-pop-row dt {
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+.ax-col-pop-row dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ax-col-pop-row dd.warn {
+  color: var(--color-text-danger);
+}
+.ax-col-pop-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 0.5px solid var(--color-border-tertiary);
+}
+.ax-col-pop-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+  margin: 0 0 6px;
+}
+.ax-col-pop-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ax-col-pop-bar {
+  display: grid;
+  grid-template-columns: 90px 1fr 88px;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+}
+.ax-col-pop-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.ax-col-pop-bar-track {
+  display: block;
+  height: 6px;
+  background: var(--color-background-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ax-col-pop-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-text-secondary);
+  border-radius: 3px;
+}
+.ax-col-pop-bar-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
 /* --- tabs (SPSS Data View / Variable View) --- */
 .ax-tabs {
   display: flex;
