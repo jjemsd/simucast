@@ -52,7 +52,7 @@ export default function ProjectsPage() {
             disabled={uploading}
             onClick={() => fileRef.current?.click()}
           >
-            {uploading ? 'Uploading…' : 'Upload file'}
+            {uploading ? 'Uploading…' : '+ New project'}
           </button>
         </div>
       </div>

@@ -109,7 +109,7 @@ export default function Sidebar() {
               />
             </svg>
           </div>
-          <span style={{ fontWeight: 500, fontSize: 15 }}>Axion</span>
+          <span style={{ fontWeight: 500, fontSize: 15 }}>SimuCast</span>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
