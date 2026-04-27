@@ -165,7 +165,9 @@ function ColumnHeader({ datasetId, variable }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [alignRight, setAlignRight] = useState(false)
   const ref = useRef(null)
+  const popRef = useRef(null)
 
   useEffect(() => {
     if (!open) return
@@ -174,6 +176,27 @@ function ColumnHeader({ datasetId, variable }) {
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  // Flip to right-aligned if the popover would overflow the viewport on the right.
+  useEffect(() => {
+    if (!open) {
+      setAlignRight(false)
+      return
+    }
+    const measure = () => {
+      const th = ref.current
+      if (!th) return
+      const POP_WIDTH = 320
+      const MARGIN = 8
+      const rect = th.getBoundingClientRect()
+      const wouldOverflowRight = rect.left + POP_WIDTH > window.innerWidth - MARGIN
+      const fitsLeft = rect.right - POP_WIDTH > MARGIN
+      setAlignRight(wouldOverflowRight && fitsLeft)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
   }, [open])
 
   const toggle = () => {
@@ -204,7 +227,11 @@ function ColumnHeader({ datasetId, variable }) {
       </button>
       <span className="ax-grid-type">{variable.dtype}</span>
       {open && (
-        <div className="ax-col-popover" onClick={(e) => e.stopPropagation()}>
+        <div
+          ref={popRef}
+          className={`ax-col-popover ${alignRight ? 'right' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+        >
           {loading && <p className="ax-col-pop-msg">Loading…</p>}
           {error && <p className="ax-col-pop-msg" style={{ color: 'var(--color-text-danger)' }}>{error}</p>}
           {stats && <ColumnStatsBody stats={stats} />}
