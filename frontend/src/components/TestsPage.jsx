@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { api } from '../api'
+import AIAssistantPanel from './AIAssistantPanel'
 
 const TESTS = [
   { key: 't', label: 'Independent t-test', needs: ['group', 'measure'] },
@@ -45,6 +46,8 @@ export default function TestsPage({ dataset }) {
     <>
       <h1 className="ax-page-title">Hypothesis testing</h1>
       <p className="ax-page-sub">Pick a test type, set the variables, and the backend runs scipy.</p>
+
+      <AIAssistantPanel datasetId={dataset.id} context="tests" />
 
       <p className="ax-lbl">Test type</p>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
