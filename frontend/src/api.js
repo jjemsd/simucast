@@ -35,8 +35,25 @@ export const api = {
   // datasets
   listDatasets: () => request('/api/datasets'),
   getDataset: (id) => request(`/api/datasets/${id}`),
-  getRows: (id, page = 1, pageSize = 100) =>
-    request(`/api/datasets/${id}/rows?page=${page}&page_size=${pageSize}`),
+  getRows: (id, page = 1, pageSize = 100, stageId) => {
+    const qs = `page=${page}&page_size=${pageSize}` + (stageId ? `&stage_id=${encodeURIComponent(stageId)}` : '')
+    return request(`/api/datasets/${id}/rows?${qs}`)
+  },
+  listStages: (id) => request(`/api/datasets/${id}/stages`),
+  restoreStage: (id, stageId) =>
+    request(`/api/datasets/${id}/stages/${encodeURIComponent(stageId)}/restore`, { method: 'POST' }),
+  exportCsvUrl: (id, stageId) =>
+    `${BASE}/api/datasets/${id}/export.csv` + (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
+  aiRecommend: (id, context) =>
+    request(`/api/datasets/${id}/ai/recommend`, {
+      method: 'POST',
+      body: JSON.stringify({ context }),
+    }),
+  aiExplain: (id, step, params, question) =>
+    request(`/api/datasets/${id}/ai/explain`, {
+      method: 'POST',
+      body: JSON.stringify({ step, params, question }),
+    }),
   uploadDataset: async (file, name, description) => {
     const fd = new FormData()
     fd.append('file', file)

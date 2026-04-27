@@ -6,8 +6,12 @@ import { api } from '../api'
  * Excel/SPSS-style viewer with two tabs:
  *   - Data View: paginated grid of actual rows (frozen row numbers, column headers show dtype)
  *   - Variable View: metadata about each column (name, type, missing, unique)
+ *
+ * `stageId` is optional — when set, the grid renders that specific stage
+ * (e.g. the original upload before any cleaning) instead of the active one.
+ * Columns are derived from row keys in that case so they reflect the stage.
  */
-export default function DataGridModal({ datasetId, variables, onClose }) {
+export default function DataGridModal({ datasetId, variables, stageId, stageLabel, onClose }) {
   const [tab, setTab] = useState('data')
   const [rows, setRows] = useState([])
   const [page, setPage] = useState(1)
@@ -19,25 +23,33 @@ export default function DataGridModal({ datasetId, variables, onClose }) {
     if (tab !== 'data') return
     setLoading(true)
     api
-      .getRows(datasetId, page, pageSize)
+      .getRows(datasetId, page, pageSize, stageId)
       .then((r) => {
         setRows(r.rows)
         setTotal(r.total)
       })
       .finally(() => setLoading(false))
-  }, [datasetId, page, pageSize, tab])
+  }, [datasetId, page, pageSize, tab, stageId])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const columns = variables.map((v) => v.name)
+  // When viewing an arbitrary stage, columns may differ from the active
+  // dataset's variables — derive from the first row in that case.
+  const stageColumns = stageId && rows[0] ? Object.keys(rows[0]) : null
+  const columns = stageColumns || variables.map((v) => v.name)
+  const headerVars = stageColumns
+    ? stageColumns.map((name) => ({ name, dtype: 'text' }))
+    : variables
 
   return (
     <div className="ax-modal-bg" onClick={onClose}>
       <div className="ax-modal" onClick={(e) => e.stopPropagation()}>
         <div className="ax-modal-header">
           <div>
-            <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>Dataset viewer</p>
+            <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>
+              Dataset viewer{stageLabel ? ` — ${stageLabel}` : ''}
+            </p>
             <p style={{ fontSize: 11, color: 'var(--color-text-secondary)', margin: '2px 0 0' }}>
-              {total.toLocaleString()} rows · {variables.length} columns
+              {total.toLocaleString()} rows · {headerVars.length} columns
             </p>
           </div>
           <button className="ax-btn" onClick={onClose}>
@@ -65,8 +77,15 @@ export default function DataGridModal({ datasetId, variables, onClose }) {
                     <thead>
                       <tr>
                         <th className="ax-grid-row-num-head">#</th>
-                        {variables.map((v) => (
-                          <ColumnHeader key={v.name} datasetId={datasetId} variable={v} />
+                        {headerVars.map((v) => (
+                          stageId ? (
+                            <th key={v.name}>
+                              {v.name}
+                              <span className="ax-grid-type">{v.dtype}</span>
+                            </th>
+                          ) : (
+                            <ColumnHeader key={v.name} datasetId={datasetId} variable={v} />
+                          )
                         ))}
                       </tr>
                     </thead>
