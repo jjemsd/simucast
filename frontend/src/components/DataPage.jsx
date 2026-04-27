@@ -1,9 +1,11 @@
 import React, { useState } from 'react'
 import { api } from '../api'
 import DataGridModal from './DataGridModal'
+import ColumnValuesModal from './ColumnValuesModal'
 
 export default function DataPage({ dataset }) {
   const [showModal, setShowModal] = useState(false)
+  const [activeVar, setActiveVar] = useState(null)
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiSuggestions, setAiSuggestions] = useState([])
 
@@ -77,6 +79,9 @@ export default function DataPage({ dataset }) {
       </div>
 
       <p className="ax-lbl">Variables</p>
+      <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', margin: '0 0 6px' }}>
+        Click a row to view all entries for that variable.
+      </p>
       <div className="ax-card" style={{ padding: 0, overflow: 'hidden' }}>
         <table className="ax-tbl">
           <thead>
@@ -89,7 +94,11 @@ export default function DataPage({ dataset }) {
           </thead>
           <tbody>
             {(dataset.variables || []).map((v) => (
-              <tr key={v.name}>
+              <tr
+                key={v.name}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setActiveVar(v)}
+              >
                 <td style={{ fontFamily: 'var(--font-mono)' }}>{v.name}</td>
                 <td>
                   <span style={{ color: 'var(--color-text-info)' }}>{v.dtype}</span>
@@ -107,6 +116,13 @@ export default function DataPage({ dataset }) {
           datasetId={dataset.id}
           variables={dataset.variables || []}
           onClose={() => setShowModal(false)}
+        />
+      )}
+      {activeVar && (
+        <ColumnValuesModal
+          datasetId={dataset.id}
+          variable={activeVar}
+          onClose={() => setActiveVar(null)}
         />
       )}
     </>

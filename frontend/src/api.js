@@ -47,6 +47,10 @@ export const api = {
     }),
   columnStats: (dsId, colName) =>
     request(`/api/datasets/${dsId}/columns/${encodeURIComponent(colName)}/stats`),
+  columnValues: (dsId, colName, page = 1, pageSize = 200) =>
+    request(
+      `/api/datasets/${dsId}/columns/${encodeURIComponent(colName)}/values?page=${page}&page_size=${pageSize}`,
+    ),
 
   // cleaning
   cleanSuggestions: (id) => request(`/api/datasets/${id}/clean/suggestions`),

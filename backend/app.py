@@ -350,6 +350,36 @@ def get_rows(ds_id):
     finally:
         s.close()
 
+@app.route("/api/datasets/<ds_id>/columns/<col_name>/values", methods=["GET"])
+def get_column_values(ds_id, col_name):
+    """Paginated single-column entries with their row index."""
+    page = max(_parse_num(request.args.get("page"), 1, int), 1)
+    page_size = min(max(_parse_num(request.args.get("page_size"), 200, int), 1), 1000)
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        rows = jload(ds.data) or []
+        if rows and col_name not in rows[0]:
+            return {"error": "column not found"}, 404
+        start = (page - 1) * page_size
+        end = start + page_size
+        slice_ = rows[start:end]
+        values = [
+            {"row": start + i + 1, "value": r.get(col_name)}
+            for i, r in enumerate(slice_)
+        ]
+        return {
+            "column": col_name,
+            "values": values,
+            "page": page,
+            "page_size": page_size,
+            "total": len(rows),
+        }
+    finally:
+        s.close()
+
 @app.route("/api/datasets/<ds_id>/variables/<var_name>", methods=["PATCH"])
 def update_variable(ds_id, var_name):
     """Update variable dtype."""
