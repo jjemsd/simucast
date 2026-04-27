@@ -225,6 +225,15 @@ def _schema_guard():
         return {"error": "database warming up, retry in a moment"}, 503
     return None
 
+@app.errorhandler(Exception)
+def _json_error(e):
+    """Return JSON for any uncaught exception so the frontend can display it."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return {"error": e.description}, e.code
+    app.logger.exception("Unhandled error in %s", request.path)
+    return {"error": f"{type(e).__name__}: {e}"}, 500
+
 # --- Datasets ---
 
 @app.route("/api/datasets", methods=["GET"])
@@ -702,24 +711,34 @@ def train_model(ds_id):
         df = df_from_dataset(ds)
         if target not in df.columns:
             return {"error": f"target {target} not found"}, 400
-        features = [f for f in features if f in df.columns]
+        features = [f for f in features if f in df.columns and f != target]
         if not features:
             # default: all numeric non-target
             features = [c for c in df.select_dtypes(include=[np.number]).columns if c != target]
+        if not features:
+            return {"error": "no usable feature columns"}, 400
 
         data = df[features + [target]].dropna()
+        if len(data) < 10:
+            return {"error": f"only {len(data)} rows remain after dropping missing values; need at least 10"}, 400
+
         X = data[features].copy()
         y = data[target]
 
         # one-hot encode categorical features
         X = pd.get_dummies(X, drop_first=True)
+        if X.shape[1] == 0:
+            return {"error": "no usable features after encoding"}, 400
 
         # classification vs regression
         is_classification = y.nunique() <= 10 and (
             pd.api.types.is_object_dtype(y) or pd.api.types.is_integer_dtype(y) or pd.api.types.is_bool_dtype(y)
         )
-        if is_classification and not pd.api.types.is_numeric_dtype(y):
-            y = LabelEncoder().fit_transform(y.astype(str))
+        if is_classification:
+            if y.nunique() < 2:
+                return {"error": f"target '{target}' has only one class; cannot train"}, 400
+            if not pd.api.types.is_numeric_dtype(y):
+                y = LabelEncoder().fit_transform(y.astype(str))
 
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=42

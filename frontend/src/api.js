@@ -6,11 +6,19 @@ async function request(path, opts = {}) {
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     ...opts,
   })
-  if (!res.ok) {
-    const msg = await res.text()
-    throw new Error(msg || `${res.status} ${res.statusText}`)
-  }
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
+}
+
+async function extractError(res) {
+  const text = await res.text()
+  try {
+    const j = JSON.parse(text)
+    if (j && j.error) return j.error
+  } catch {
+    // fall through
+  }
+  return text.startsWith('<') ? `${res.status} ${res.statusText}` : text || `${res.status} ${res.statusText}`
 }
 
 export const api = {
@@ -19,14 +27,13 @@ export const api = {
   getDataset: (id) => request(`/api/datasets/${id}`),
   getRows: (id, page = 1, pageSize = 100) =>
     request(`/api/datasets/${id}/rows?page=${page}&page_size=${pageSize}`),
-  uploadDataset: (file, name) => {
+  uploadDataset: async (file, name) => {
     const fd = new FormData()
     fd.append('file', file)
     if (name) fd.append('name', name)
-    return fetch(`${BASE}/api/datasets/upload`, { method: 'POST', body: fd }).then((r) => {
-      if (!r.ok) throw new Error('Upload failed')
-      return r.json()
-    })
+    const r = await fetch(`${BASE}/api/datasets/upload`, { method: 'POST', body: fd })
+    if (!r.ok) throw new Error(await extractError(r))
+    return r.json()
   },
   updateVariable: (dsId, varName, body) =>
     request(`/api/datasets/${dsId}/variables/${varName}`, {
