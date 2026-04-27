@@ -3,20 +3,13 @@ import { api } from '../api'
 import DataGridModal from './DataGridModal'
 import ColumnValuesModal from './ColumnValuesModal'
 import StageTimeline from './StageTimeline'
+import AIAssistantPanel from './AIAssistantPanel'
 
 export default function DataPage({ dataset, setDataset }) {
   const [viewStageId, setViewStageId] = useState(null)
   const [viewStageLabel, setViewStageLabel] = useState(null)
   const [activeVar, setActiveVar] = useState(null)
-  const [aiPrompt, setAiPrompt] = useState('')
-  const [aiSuggestions, setAiSuggestions] = useState([])
   const [historyKey, setHistoryKey] = useState(0)
-
-  const askAi = async () => {
-    if (!dataset || !aiPrompt.trim()) return
-    const r = await api.aiSuggest(dataset.id, aiPrompt)
-    setAiSuggestions(r.suggestions || [])
-  }
 
   const refreshDataset = async () => {
     try {
@@ -65,47 +58,7 @@ export default function DataPage({ dataset, setDataset }) {
         </div>
       </div>
 
-      <div className="ax-card" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-            <path
-              d="M7 1L8.3 5.1L12.5 6L8.3 8.2L7 13L5.7 8.2L1.5 6L5.7 5.1L7 1Z"
-              fill="var(--color-accent)"
-            />
-          </svg>
-          <span style={{ fontSize: 12, fontWeight: 500 }}>AI analyst</span>
-        </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input
-            type="text"
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-            placeholder="Describe your analysis..."
-            style={{ flex: 1 }}
-            onKeyDown={(e) => e.key === 'Enter' && askAi()}
-          />
-          <button className="ax-btn" onClick={askAi}>
-            Suggest
-          </button>
-        </div>
-        {aiSuggestions.length > 0 && (
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {aiSuggestions.map((s, i) => (
-              <div
-                key={i}
-                style={{
-                  padding: '8px 10px',
-                  background: 'var(--color-background-secondary)',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
-              >
-                {s.label}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <AIAssistantPanel datasetId={dataset.id} context="data" />
 
       <p className="ax-lbl">Data history</p>
       <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', margin: '0 0 6px' }}>
