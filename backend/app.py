@@ -1176,6 +1176,158 @@ def _coerce_num(v):
         return v
 
 
+# --- Expand (synthesize rows for small datasets) ---
+
+@app.route("/api/datasets/<ds_id>/expand", methods=["POST"])
+def expand_dataset(ds_id):
+    """Grow a small dataset by bootstrap resample or synthetic generation.
+
+    Body: {method: 'bootstrap'|'synthetic', target_rows: int, options: {...}}
+    Set ?preview=true to return a 10-row sample + per-numeric-column drift
+    stats without persisting. Apply creates a new stage.
+    """
+    body = request.get_json() or {}
+    method = (body.get("method") or "bootstrap").lower()
+    target_rows = int(body.get("target_rows") or 0)
+    options = body.get("options") or {}
+    preview = request.args.get("preview", "").lower() in ("1", "true", "yes")
+
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds, s)
+        if len(df) == 0:
+            return {"error": "dataset is empty"}, 400
+        if target_rows <= len(df):
+            return {"error": f"target_rows ({target_rows}) must exceed current row count ({len(df)})"}, 400
+
+        try:
+            df_new, summary, drift = _expand(df, method, target_rows, options)
+        except ValueError as e:
+            return {"error": str(e)}, 400
+
+        if preview:
+            sample = df_new.tail(10)  # show some of the new rows
+            sample_records = clean_json(
+                sample.where(pd.notnull(sample), None).to_dict(orient="records")
+            )
+            return jsonify({
+                "preview": True,
+                "method": method,
+                "summary": summary,
+                "row_count": int(len(df_new)),
+                "col_count": int(len(df_new.columns)),
+                "added_rows": int(len(df_new) - len(df)),
+                "columns": list(df_new.columns),
+                "sample": sample_records,
+                "drift": drift,
+            })
+
+        stage = create_stage(s, ds, df_new, op_type=f"expand_{method}",
+                             op_params={"method": method, "target_rows": target_rows, "options": options},
+                             summary=summary)
+        return jsonify({
+            "ok": True,
+            "stage_id": stage.id,
+            "summary": summary,
+            "row_count": ds.row_count,
+            "col_count": ds.col_count,
+        })
+    finally:
+        s.close()
+
+
+def _expand(df, method, target_rows, options):
+    """Return (new_df, summary, drift_stats)."""
+    n_extra = target_rows - len(df)
+    seed = int(options.get("seed", 42))
+    rng = np.random.default_rng(seed)
+
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+
+    before_stats = {c: _col_stats(df[c]) for c in numeric_cols}
+
+    if method == "bootstrap":
+        noise_pct = float(options.get("noise_pct", 0))  # percent of std dev
+        extra = df.sample(n=n_extra, replace=True, random_state=seed).reset_index(drop=True)
+        if noise_pct > 0 and numeric_cols:
+            for col in numeric_cols:
+                std = df[col].std()
+                if pd.isna(std) or std == 0:
+                    continue
+                extra[col] = extra[col] + rng.normal(0, std * (noise_pct / 100), size=len(extra))
+        out = pd.concat([df, extra], ignore_index=True)
+        noise_note = f" with {noise_pct:g}% Gaussian noise on numeric columns" if noise_pct else ""
+        summary = f"Bootstrap-resampled {n_extra} new rows{noise_note} (now {len(out)} total)"
+    elif method == "synthetic":
+        # per-column independent sampling: numeric via KDE, categorical/text via frequency
+        new_data = {c: [] for c in df.columns}
+        for col in df.columns:
+            series = df[col]
+            present = series.dropna()
+            if len(present) == 0:
+                new_data[col] = [None] * n_extra
+                continue
+            if pd.api.types.is_numeric_dtype(series) and len(present) >= 2 and present.nunique() >= 3:
+                try:
+                    from scipy.stats import gaussian_kde
+                    kde = gaussian_kde(present.astype(float).values)
+                    sampled = kde.resample(n_extra, seed=seed)[0]
+                    # round to int if original was integer-like
+                    if pd.api.types.is_integer_dtype(series.dropna()) or all(float(v).is_integer() for v in present.head(20)):
+                        sampled = np.round(sampled).astype(int)
+                    new_data[col] = sampled.tolist()
+                except Exception:
+                    new_data[col] = rng.choice(present.values, size=n_extra, replace=True).tolist()
+            else:
+                # categorical / text — sample from observed frequencies
+                vc = present.value_counts(normalize=True)
+                new_data[col] = rng.choice(vc.index.values, size=n_extra, replace=True, p=vc.values).tolist()
+        extra = pd.DataFrame(new_data)
+        out = pd.concat([df, extra], ignore_index=True)
+        summary = (
+            f"Synthesized {n_extra} new rows by per-column sampling "
+            f"(numeric: KDE; categorical: observed frequencies). Cross-column correlations "
+            f"are NOT preserved — use bootstrap if you need the joint distribution."
+        )
+    else:
+        raise ValueError(f"unknown expand method '{method}'")
+
+    after_stats = {c: _col_stats(out[c]) for c in numeric_cols}
+    drift = []
+    for c in numeric_cols:
+        b, a = before_stats[c], after_stats[c]
+        drift.append({
+            "column": c,
+            "before_mean": b["mean"], "after_mean": a["mean"],
+            "before_std": b["std"], "after_std": a["std"],
+            "mean_pct_change": _pct_change(b["mean"], a["mean"]),
+            "std_pct_change": _pct_change(b["std"], a["std"]),
+        })
+
+    return out, summary, drift
+
+
+def _col_stats(series):
+    s = series.dropna()
+    if len(s) == 0:
+        return {"mean": None, "std": None}
+    try:
+        return {"mean": float(s.mean()), "std": float(s.std()) if len(s) > 1 else 0.0}
+    except Exception:
+        return {"mean": None, "std": None}
+
+
+def _pct_change(a, b):
+    if a is None or b is None:
+        return None
+    if a == 0:
+        return None
+    return round((b - a) / abs(a) * 100, 2)
+
+
 # --- Descriptive stats ---
 
 @app.route("/api/datasets/<ds_id>/describe", methods=["POST"])

@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import DataPage from './DataPage'
 import CleanPage from './CleanPage'
+import ExpandPage from './ExpandPage'
 import DescribePage from './DescribePage'
 import TestsPage from './TestsPage'
 import AdvancedPage from './AdvancedPage'
@@ -13,6 +14,7 @@ import ReportPage from './ReportPage'
 const TABS = [
   { key: 'data', label: 'Data' },
   { key: 'clean', label: 'Clean' },
+  { key: 'expand', label: 'Expand' },
   { key: 'describe', label: 'Describe' },
   { key: 'tests', label: 'Tests' },
   { key: 'advanced', label: 'Advanced' },
@@ -90,6 +92,8 @@ function renderTab(tab, props) {
       return <DataPage dataset={props.dataset} setDataset={props.setDataset} />
     case 'clean':
       return <CleanPage dataset={props.dataset} setDataset={props.setDataset} />
+    case 'expand':
+      return <ExpandPage dataset={props.dataset} setDataset={props.setDataset} />
     case 'describe':
       return <DescribePage dataset={props.dataset} />
     case 'tests':
