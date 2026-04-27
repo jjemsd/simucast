@@ -613,11 +613,8 @@ input[type="range"]::-moz-range-thumb {
   color: var(--color-text-tertiary);
 }
 .ax-col-popover {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: auto;
-  margin-top: 4px;
+  position: fixed;
+  margin: 0;
   width: 320px;
   max-height: 480px;
   overflow: auto;
@@ -626,15 +623,11 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 12px;
-  z-index: 10;
+  z-index: 1000;
   font-family: var(--font-sans);
   font-weight: 400;
   white-space: normal;
   text-transform: none;
-}
-.ax-col-popover.right {
-  left: auto;
-  right: 0;
 }
 .ax-col-pop-msg {
   font-size: 12px;

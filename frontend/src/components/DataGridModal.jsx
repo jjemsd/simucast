@@ -165,38 +165,52 @@ function ColumnHeader({ datasetId, variable }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [alignRight, setAlignRight] = useState(false)
+  const [pos, setPos] = useState(null) // { top, left }
   const ref = useRef(null)
   const popRef = useRef(null)
+
+  // Position the fixed popover relative to the header, flipping left if it
+  // would overflow the viewport. Re-measure on scroll/resize while open.
+  useEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    const POP_WIDTH = 320
+    const MARGIN = 8
+    const measure = () => {
+      const th = ref.current
+      if (!th) return
+      const rect = th.getBoundingClientRect()
+      let left = rect.left
+      if (left + POP_WIDTH > window.innerWidth - MARGIN) {
+        left = Math.max(MARGIN, rect.right - POP_WIDTH)
+      }
+      setPos({ top: rect.bottom + 4, left })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true) // capture nested scrolls
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
     const onDoc = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+      if (
+        ref.current &&
+        !ref.current.contains(e.target) &&
+        popRef.current &&
+        !popRef.current.contains(e.target)
+      ) {
+        setOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
-  }, [open])
-
-  // Flip to right-aligned if the popover would overflow the viewport on the right.
-  useEffect(() => {
-    if (!open) {
-      setAlignRight(false)
-      return
-    }
-    const measure = () => {
-      const th = ref.current
-      if (!th) return
-      const POP_WIDTH = 320
-      const MARGIN = 8
-      const rect = th.getBoundingClientRect()
-      const wouldOverflowRight = rect.left + POP_WIDTH > window.innerWidth - MARGIN
-      const fitsLeft = rect.right - POP_WIDTH > MARGIN
-      setAlignRight(wouldOverflowRight && fitsLeft)
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
   }, [open])
 
   const toggle = () => {
@@ -214,7 +228,7 @@ function ColumnHeader({ datasetId, variable }) {
   }
 
   return (
-    <th style={{ position: 'relative' }} ref={ref}>
+    <th ref={ref}>
       <button
         type="button"
         onClick={toggle}
@@ -226,11 +240,12 @@ function ColumnHeader({ datasetId, variable }) {
         <span className="ax-grid-head-caret" aria-hidden>▾</span>
       </button>
       <span className="ax-grid-type">{variable.dtype}</span>
-      {open && (
+      {open && pos && (
         <div
           ref={popRef}
-          className={`ax-col-popover ${alignRight ? 'right' : ''}`}
+          className="ax-col-popover"
           onClick={(e) => e.stopPropagation()}
+          style={{ top: pos.top, left: pos.left }}
         >
           {loading && <p className="ax-col-pop-msg">Loading…</p>}
           {error && <p className="ax-col-pop-msg" style={{ color: 'var(--color-text-danger)' }}>{error}</p>}
