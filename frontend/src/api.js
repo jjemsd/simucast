@@ -130,6 +130,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  trainManyModels: (id, body) =>
+    request(`/api/datasets/${id}/models/train_many`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  preprocessingPlan: (id, body) =>
+    request(`/api/datasets/${id}/models/preprocessing_plan`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   listModels: (id) => request(`/api/datasets/${id}/models`),
   getModel: (mid) => request(`/api/models/${mid}`),
   predict: (mid, inputs) =>

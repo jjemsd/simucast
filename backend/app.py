@@ -1547,12 +1547,251 @@ def do_pca(ds_id):
 
 # --- Modeling ---
 
-@app.route("/api/datasets/<ds_id>/models/train", methods=["POST"])
-def train_model(ds_id):
+ALGORITHM_CATALOG = {
+    "logistic": {"label": "Logistic regression", "task": "classification", "needs_scaling": True,  "interpretable": True},
+    "rf":       {"label": "Random forest",       "task": "both",          "needs_scaling": False, "interpretable": False},
+    "gbm":      {"label": "Gradient boost",      "task": "both",          "needs_scaling": False, "interpretable": False},
+    "linear":   {"label": "Linear regression",   "task": "regression",    "needs_scaling": True,  "interpretable": True},
+}
+
+
+def _detect_task(y):
+    """Heuristic: small distinct count + non-continuous → classification."""
+    return y.nunique() <= 10 and (
+        pd.api.types.is_object_dtype(y)
+        or pd.api.types.is_integer_dtype(y)
+        or pd.api.types.is_bool_dtype(y)
+    )
+
+
+def _build_preprocessing_plan(df, target, features, algorithms):
+    """Inspect the data and produce a transparent preprocessing plan.
+
+    Returned shape is also stored on each trained model so the user can see
+    after the fact exactly what was done.
+    """
+    if target not in df.columns:
+        raise ValueError(f"target '{target}' not in dataset")
+    features = [f for f in features if f in df.columns and f != target]
+    if not features:
+        raise ValueError("pick at least one feature")
+
+    sub = df[features + [target]]
+    rows_before = len(sub)
+    sub_clean = sub.dropna()
+    rows_after = len(sub_clean)
+    dropped = rows_before - rows_after
+
+    y = sub_clean[target]
+    task = "classification" if _detect_task(y) else "regression"
+
+    # encoding
+    encoding = []
+    for c in features:
+        col = sub_clean[c]
+        if pd.api.types.is_numeric_dtype(col):
+            continue
+        cats = col.astype(str).unique().tolist()
+        encoding.append({
+            "column": c,
+            "method": "one_hot",
+            "n_categories": len(cats),
+            "sample_categories": cats[:6],
+        })
+
+    # algos requested → does scaling apply?
+    scaling = []
+    needs_scaling = any(ALGORITHM_CATALOG.get(a, {}).get("needs_scaling") for a in algorithms or [])
+    if needs_scaling:
+        scaling = [{
+            "method": "StandardScaler",
+            "columns": "all numeric features (after one-hot encoding)",
+            "applies_to": [a for a in algorithms or [] if ALGORITHM_CATALOG.get(a, {}).get("needs_scaling")],
+        }]
+
+    # missing report
+    missing_report = [
+        {"column": c, "missing": int(sub[c].isna().sum())}
+        for c in features + [target] if sub[c].isna().sum() > 0
+    ]
+
+    # warnings
+    warnings = []
+    n_per_class = None
+    if task == "classification":
+        n_per_class = y.value_counts().to_dict()
+        smallest = min(n_per_class.values()) if n_per_class else 0
+        if smallest < 10:
+            warnings.append(f"Smallest class has only {smallest} examples — model quality will be unreliable.")
+        if len(n_per_class) > 10:
+            warnings.append(f"{len(n_per_class)} distinct target values — high cardinality may hurt accuracy.")
+    if rows_after < 50:
+        warnings.append(f"Only {rows_after} complete rows after dropping missing — consider Expand or imputation.")
+
+    # leakage heuristics: features with same uniqueness as rows ≈ id-like
+    for c in features:
+        if df[c].nunique(dropna=True) == rows_before:
+            warnings.append(f"'{c}' appears to be an ID — every row has a unique value, so it'll memorize the target.")
+        # high correlation with target (numeric only)
+        if pd.api.types.is_numeric_dtype(sub_clean[c]) and pd.api.types.is_numeric_dtype(y):
+            try:
+                corr = sub_clean[c].corr(y)
+                if corr is not None and abs(corr) > 0.99:
+                    warnings.append(f"'{c}' is almost perfectly correlated with target ({corr:+.2f}) — possible leakage.")
+            except Exception:
+                pass
+
+    return {
+        "task": task,
+        "target": target,
+        "features": features,
+        "rows_used": rows_after,
+        "rows_dropped": dropped,
+        "encoding": encoding,
+        "scaling": scaling,
+        "missing_report": missing_report,
+        "class_balance": {str(k): int(v) for k, v in (n_per_class or {}).items()} if task == "classification" else None,
+        "warnings": warnings,
+    }
+
+
+def _train_one(df, target, features, algo, test_size, plan):
+    """Train a single model. Returns a dict with metrics + importance.
+
+    The transparent preprocessing plan is reused so every algorithm in a
+    multi-train run sees an identical pipeline.
+    """
+    data = df[features + [target]].dropna()
+    X = data[features].copy()
+    y = data[target]
+
+    X = pd.get_dummies(X, drop_first=True)
+
+    is_classification = plan["task"] == "classification"
+    if is_classification and not pd.api.types.is_numeric_dtype(y):
+        y = LabelEncoder().fit_transform(y.astype(str))
+
+    needs_scaling = ALGORITHM_CATALOG.get(algo, {}).get("needs_scaling", False)
+    scaler = None
+    if needs_scaling:
+        scaler = StandardScaler()
+        X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
+    else:
+        X_scaled = X
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_scaled, y, test_size=test_size, random_state=42
+    )
+
+    if is_classification:
+        if algo == "rf":
+            clf = RandomForestClassifier(n_estimators=100, random_state=42)
+        elif algo == "gbm":
+            clf = GradientBoostingClassifier(random_state=42)
+        elif algo == "logistic":
+            clf = LogisticRegression(max_iter=1000)
+        else:
+            raise ValueError(f"algorithm '{algo}' not supported for classification")
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+        metrics = {
+            "task": "classification",
+            "accuracy": float(accuracy_score(y_test, y_pred)),
+            "precision": float(precision_score(y_test, y_pred, average="weighted", zero_division=0)),
+            "recall": float(recall_score(y_test, y_pred, average="weighted", zero_division=0)),
+            "f1": float(f1_score(y_test, y_pred, average="weighted", zero_division=0)),
+        }
+        if len(np.unique(y)) == 2 and hasattr(clf, "predict_proba"):
+            try:
+                y_proba = clf.predict_proba(X_test)[:, 1]
+                metrics["auc"] = float(roc_auc_score(y_test, y_proba))
+            except Exception:
+                pass
+        metrics["confusion_matrix"] = confusion_matrix(y_test, y_pred).tolist()
+    else:
+        if algo == "rf":
+            from sklearn.ensemble import RandomForestRegressor
+            clf = RandomForestRegressor(n_estimators=100, random_state=42)
+        elif algo == "gbm":
+            from sklearn.ensemble import GradientBoostingRegressor
+            clf = GradientBoostingRegressor(random_state=42)
+        elif algo == "linear":
+            clf = LinearRegression()
+        else:
+            raise ValueError(f"algorithm '{algo}' not supported for regression")
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+        metrics = {
+            "task": "regression",
+            "r2": float(r2_score(y_test, y_pred)),
+            "rmse": float(np.sqrt(mean_squared_error(y_test, y_pred))),
+            "mae": float(np.mean(np.abs(y_test - y_pred))),
+        }
+
+    importance = {}
+    if hasattr(clf, "feature_importances_"):
+        importance = dict(zip(X.columns, clf.feature_importances_.tolist()))
+    elif hasattr(clf, "coef_"):
+        coef = np.asarray(clf.coef_).ravel()
+        importance = dict(zip(X.columns, np.abs(coef).tolist()))
+    importance = dict(sorted(importance.items(), key=lambda kv: -kv[1])[:15])
+
+    coefficients = None
+    if algo in ("logistic", "linear") and hasattr(clf, "coef_"):
+        coef = np.asarray(clf.coef_).ravel().tolist()
+        intercept = float(np.asarray(clf.intercept_).ravel()[0]) if hasattr(clf, "intercept_") else 0.0
+        # if we scaled, store the scaler stats so what-if can apply the same transform
+        feature_means = {c: float(scaler.mean_[i]) if scaler is not None else float(X[c].mean())
+                         for i, c in enumerate(X.columns)}
+        feature_stds = {c: float(scaler.scale_[i]) if scaler is not None else float(X[c].std() or 1)
+                        for i, c in enumerate(X.columns)}
+        coefficients = {
+            "features": X.columns.tolist(),
+            "coef": coef,
+            "intercept": intercept,
+            "task": metrics["task"],
+            "feature_means": feature_means,
+            "feature_stds": feature_stds,
+            "scaled": scaler is not None,
+        }
+
+    return {
+        "metrics": metrics,
+        "importance": importance,
+        "coefficients": coefficients,
+        "encoded_features": X.columns.tolist(),
+    }
+
+
+@app.route("/api/datasets/<ds_id>/models/preprocessing_plan", methods=["POST"])
+def preprocessing_plan(ds_id):
+    """Return the preprocessing plan for a target+features+algos config without training."""
     body = request.get_json() or {}
     target = body.get("target")
     features = body.get("features") or []
-    algo = body.get("algorithm", "logistic")  # logistic | rf | gbm | linear
+    algorithms = body.get("algorithms") or []
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds, s)
+        try:
+            plan = _build_preprocessing_plan(df, target, features, algorithms)
+        except ValueError as e:
+            return {"error": str(e)}, 400
+        return jsonify(clean_json(plan))
+    finally:
+        s.close()
+
+
+@app.route("/api/datasets/<ds_id>/models/train", methods=["POST"])
+def train_model(ds_id):
+    """Train a single model. Kept for backward compat — train_many is preferred."""
+    body = request.get_json() or {}
+    target = body.get("target")
+    features = body.get("features") or []
+    algo = body.get("algorithm", "logistic")
     test_size = min(max(_parse_num(body.get("test_size"), 0.2, float), 0.05), 0.5)
 
     s = db()
@@ -1560,98 +1799,17 @@ def train_model(ds_id):
         ds = s.query(Dataset).filter_by(id=ds_id).first()
         if not ds:
             return {"error": "not found"}, 404
-        df = df_from_dataset(ds)
-        if target not in df.columns:
-            return {"error": f"target {target} not found"}, 400
-        features = [f for f in features if f in df.columns]
+        df = df_from_dataset(ds, s)
         if not features:
-            # default: all numeric non-target
             features = [c for c in df.select_dtypes(include=[np.number]).columns if c != target]
-
-        data = df[features + [target]].dropna()
-        X = data[features].copy()
-        y = data[target]
-
-        # one-hot encode categorical features
-        X = pd.get_dummies(X, drop_first=True)
-
-        # classification vs regression
-        is_classification = y.nunique() <= 10 and (
-            pd.api.types.is_object_dtype(y) or pd.api.types.is_integer_dtype(y) or pd.api.types.is_bool_dtype(y)
-        )
-        if is_classification and not pd.api.types.is_numeric_dtype(y):
-            y = LabelEncoder().fit_transform(y.astype(str))
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=42
-        )
-
-        if is_classification:
-            if algo == "rf":
-                clf = RandomForestClassifier(n_estimators=100, random_state=42)
-            elif algo == "gbm":
-                clf = GradientBoostingClassifier(random_state=42)
-            else:
-                clf = LogisticRegression(max_iter=1000)
-            clf.fit(X_train, y_train)
-            y_pred = clf.predict(X_test)
-            metrics = {
-                "task": "classification",
-                "accuracy": float(accuracy_score(y_test, y_pred)),
-                "precision": float(precision_score(y_test, y_pred, average="weighted", zero_division=0)),
-                "recall": float(recall_score(y_test, y_pred, average="weighted", zero_division=0)),
-                "f1": float(f1_score(y_test, y_pred, average="weighted", zero_division=0)),
-            }
-            # auc only for binary
-            if len(np.unique(y)) == 2 and hasattr(clf, "predict_proba"):
-                try:
-                    y_proba = clf.predict_proba(X_test)[:, 1]
-                    metrics["auc"] = float(roc_auc_score(y_test, y_proba))
-                except Exception:
-                    pass
-            # confusion matrix
-            cm = confusion_matrix(y_test, y_pred).tolist()
-            metrics["confusion_matrix"] = cm
-        else:
-            if algo == "rf":
-                from sklearn.ensemble import RandomForestRegressor
-                clf = RandomForestRegressor(n_estimators=100, random_state=42)
-            elif algo == "gbm":
-                from sklearn.ensemble import GradientBoostingRegressor
-                clf = GradientBoostingRegressor(random_state=42)
-            else:
-                clf = LinearRegression()
-            clf.fit(X_train, y_train)
-            y_pred = clf.predict(X_test)
-            metrics = {
-                "task": "regression",
-                "r2": float(r2_score(y_test, y_pred)),
-                "rmse": float(np.sqrt(mean_squared_error(y_test, y_pred))),
-                "mae": float(np.mean(np.abs(y_test - y_pred))),
-            }
-
-        # feature importance
-        importance = {}
-        if hasattr(clf, "feature_importances_"):
-            importance = dict(zip(X.columns, clf.feature_importances_.tolist()))
-        elif hasattr(clf, "coef_"):
-            coef = np.asarray(clf.coef_).ravel()
-            importance = dict(zip(X.columns, np.abs(coef).tolist()))
-        importance = dict(sorted(importance.items(), key=lambda kv: -kv[1])[:15])
-
-        # store coefficients for what-if (simple linear/logistic)
-        coefficients = None
-        if algo in ("logistic", "linear") and hasattr(clf, "coef_"):
-            coef = np.asarray(clf.coef_).ravel().tolist()
-            intercept = float(np.asarray(clf.intercept_).ravel()[0]) if hasattr(clf, "intercept_") else 0.0
-            coefficients = {
-                "features": X.columns.tolist(),
-                "coef": coef,
-                "intercept": intercept,
-                "task": metrics["task"],
-                "feature_means": {c: float(X[c].mean()) for c in X.columns},
-                "feature_stds": {c: float(X[c].std() or 1) for c in X.columns},
-            }
+        try:
+            plan = _build_preprocessing_plan(df, target, features, [algo])
+        except ValueError as e:
+            return {"error": str(e)}, 400
+        try:
+            result = _train_one(df, target, plan["features"], algo, test_size, plan)
+        except ValueError as e:
+            return {"error": str(e)}, 400
 
         model_id = str(uuid.uuid4())
         m = Model(
@@ -1660,10 +1818,10 @@ def train_model(ds_id):
             name=f"{algo}_{target}",
             algorithm=algo,
             target=target,
-            features=jdump(features),
-            metrics=jdump(clean_json(metrics)),
-            feature_importance=jdump(clean_json(importance)),
-            coefficients=jdump(clean_json(coefficients)) if coefficients else None,
+            features=jdump(plan["features"]),
+            metrics=jdump(clean_json(result["metrics"])),
+            feature_importance=jdump(clean_json(result["importance"])),
+            coefficients=jdump(clean_json(result["coefficients"])) if result["coefficients"] else None,
         )
         s.add(m)
         s.commit()
@@ -1672,10 +1830,88 @@ def train_model(ds_id):
             "id": model_id,
             "algorithm": algo,
             "target": target,
-            "features": features,
-            "metrics": metrics,
-            "feature_importance": importance,
-            "has_whatif": coefficients is not None,
+            "features": plan["features"],
+            "metrics": result["metrics"],
+            "feature_importance": result["importance"],
+            "preprocessing_plan": plan,
+            "has_whatif": result["coefficients"] is not None,
+        }))
+    finally:
+        s.close()
+
+
+@app.route("/api/datasets/<ds_id>/models/train_many", methods=["POST"])
+def train_many_models(ds_id):
+    """Train multiple algorithms on the same target+features config and return
+    a comparison-ready array. Each model is persisted individually so it shows
+    up in the model list and can be opened in What-if."""
+    body = request.get_json() or {}
+    target = body.get("target")
+    features = body.get("features") or []
+    algorithms = body.get("algorithms") or ["logistic"]
+    test_size = min(max(_parse_num(body.get("test_size"), 0.2, float), 0.05), 0.5)
+
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds, s)
+        try:
+            plan = _build_preprocessing_plan(df, target, features, algorithms)
+        except ValueError as e:
+            return {"error": str(e)}, 400
+
+        # task→algorithm filter so we don't try regression algos on a classification target
+        valid = []
+        skipped = []
+        for a in algorithms:
+            cat = ALGORITHM_CATALOG.get(a)
+            if not cat:
+                skipped.append({"algorithm": a, "reason": f"unknown algorithm '{a}'"})
+                continue
+            if cat["task"] != "both" and cat["task"] != plan["task"]:
+                skipped.append({"algorithm": a, "reason": f"{cat['label']} only supports {cat['task']}"})
+                continue
+            valid.append(a)
+        if not valid:
+            return {"error": "no compatible algorithm for this target", "skipped": skipped}, 400
+
+        results = []
+        for algo in valid:
+            try:
+                r = _train_one(df, target, plan["features"], algo, test_size, plan)
+                model_id = str(uuid.uuid4())
+                m = Model(
+                    id=model_id,
+                    dataset_id=ds_id,
+                    name=f"{algo}_{target}",
+                    algorithm=algo,
+                    target=target,
+                    features=jdump(plan["features"]),
+                    metrics=jdump(clean_json(r["metrics"])),
+                    feature_importance=jdump(clean_json(r["importance"])),
+                    coefficients=jdump(clean_json(r["coefficients"])) if r["coefficients"] else None,
+                )
+                s.add(m)
+                s.commit()
+                results.append({
+                    "id": model_id,
+                    "algorithm": algo,
+                    "label": ALGORITHM_CATALOG[algo]["label"],
+                    "target": target,
+                    "features": plan["features"],
+                    "metrics": r["metrics"],
+                    "feature_importance": r["importance"],
+                    "has_whatif": r["coefficients"] is not None,
+                })
+            except Exception as e:
+                skipped.append({"algorithm": algo, "reason": str(e)})
+
+        return jsonify(clean_json({
+            "preprocessing_plan": plan,
+            "models": results,
+            "skipped": skipped,
         }))
     finally:
         s.close()
