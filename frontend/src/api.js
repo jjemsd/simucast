@@ -13,6 +13,24 @@ async function request(path, opts = {}) {
   return res.json()
 }
 
+async function _submitDataset(fd) {
+  const r = await fetch(`${BASE}/api/datasets/upload`, { method: 'POST', body: fd })
+  const ct = r.headers.get('content-type') || ''
+  if (!r.ok) {
+    if (ct.includes('application/json')) {
+      const j = await r.json().catch(() => null)
+      throw new Error(j?.error || `Request failed (${r.status})`)
+    }
+    throw new Error(`Request failed (${r.status})`)
+  }
+  if (!ct.includes('application/json')) {
+    throw new Error(
+      'Server returned a non-JSON response. The frontend may be pointing at the wrong API URL — check VITE_API_URL.',
+    )
+  }
+  return r.json()
+}
+
 export const api = {
   // datasets
   listDatasets: () => request('/api/datasets'),
@@ -24,21 +42,14 @@ export const api = {
     fd.append('file', file)
     if (name) fd.append('name', name)
     if (description) fd.append('description', description)
-    const r = await fetch(`${BASE}/api/datasets/upload`, { method: 'POST', body: fd })
-    const ct = r.headers.get('content-type') || ''
-    if (!r.ok) {
-      if (ct.includes('application/json')) {
-        const j = await r.json().catch(() => null)
-        throw new Error(j?.error || `Upload failed (${r.status})`)
-      }
-      throw new Error(`Upload failed (${r.status})`)
-    }
-    if (!ct.includes('application/json')) {
-      throw new Error(
-        'Upload returned a non-JSON response. The frontend may be pointing at the wrong API URL — check VITE_API_URL.',
-      )
-    }
-    return r.json()
+    return _submitDataset(fd)
+  },
+  createFromDataset: async (sourceId, name, description) => {
+    const fd = new FormData()
+    fd.append('from_dataset_id', sourceId)
+    if (name) fd.append('name', name)
+    if (description) fd.append('description', description)
+    return _submitDataset(fd)
   },
   updateVariable: (dsId, varName, body) =>
     request(`/api/datasets/${dsId}/variables/${varName}`, {

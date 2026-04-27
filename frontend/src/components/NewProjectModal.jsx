@@ -1,20 +1,36 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 
 export default function NewProjectModal({ open, onClose, onCreated }) {
+  const [mode, setMode] = useState('upload') // 'upload' | 'existing'
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [file, setFile] = useState(null)
+  const [existing, setExisting] = useState([])
+  const [selectedId, setSelectedId] = useState(null)
+  const [loadingExisting, setLoadingExisting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const fileRef = useRef(null)
 
+  useEffect(() => {
+    if (!open || mode !== 'existing') return
+    setLoadingExisting(true)
+    api
+      .listDatasets()
+      .then(setExisting)
+      .catch(() => setExisting([]))
+      .finally(() => setLoadingExisting(false))
+  }, [open, mode])
+
   if (!open) return null
 
   const reset = () => {
+    setMode('upload')
     setName('')
     setDescription('')
     setFile(null)
+    setSelectedId(null)
     setError(null)
     setBusy(false)
     if (fileRef.current) fileRef.current.value = ''
@@ -36,23 +52,35 @@ export default function NewProjectModal({ open, onClose, onCreated }) {
     }
   }
 
+  const onPickExisting = (d) => {
+    setSelectedId(d.id)
+    if (!name) setName(d.name)
+  }
+
   const submit = async () => {
-    if (!file) {
+    if (!name.trim()) {
+      setError('Give the project a name.')
+      return
+    }
+    if (mode === 'upload' && !file) {
       setError('Choose a .csv, .xlsx, or .xls file.')
       return
     }
-    if (!name.trim()) {
-      setError('Give the project a name.')
+    if (mode === 'existing' && !selectedId) {
+      setError('Pick a file from the list.')
       return
     }
     setBusy(true)
     setError(null)
     try {
-      const result = await api.uploadDataset(file, name.trim(), description.trim())
+      const result =
+        mode === 'upload'
+          ? await api.uploadDataset(file, name.trim(), description.trim())
+          : await api.createFromDataset(selectedId, name.trim(), description.trim())
       reset()
       onCreated(result)
     } catch (err) {
-      setError(err.message || 'Upload failed')
+      setError(err.message || 'Failed to create project')
       setBusy(false)
     }
   }
@@ -78,7 +106,7 @@ export default function NewProjectModal({ open, onClose, onCreated }) {
         className="ax-card"
         style={{
           width: '100%',
-          maxWidth: 480,
+          maxWidth: 520,
           padding: 20,
           background: 'var(--color-background-primary)',
         }}
@@ -93,6 +121,25 @@ export default function NewProjectModal({ open, onClose, onCreated }) {
             style={{ padding: '2px 8px' }}
           >
             ×
+          </button>
+        </div>
+
+        <div className="ax-tabs" style={{ padding: 0, marginBottom: 12 }}>
+          <button
+            type="button"
+            className={`ax-tab ${mode === 'upload' ? 'active' : ''}`}
+            onClick={() => { setMode('upload'); setError(null) }}
+            disabled={busy}
+          >
+            Upload from computer
+          </button>
+          <button
+            type="button"
+            className={`ax-tab ${mode === 'existing' ? 'active' : ''}`}
+            onClick={() => { setMode('existing'); setError(null) }}
+            disabled={busy}
+          >
+            Choose uploaded file
           </button>
         </div>
 
@@ -115,35 +162,91 @@ export default function NewProjectModal({ open, onClose, onCreated }) {
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Optional — what this dataset is for, where it came from, etc."
             disabled={busy}
-            rows={3}
+            rows={2}
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
           />
         </label>
 
-        <div style={{ marginBottom: 12 }}>
-          <span className="ax-lbl" style={{ display: 'block', marginBottom: 4 }}>Data file</span>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            onChange={onPick}
-            disabled={busy}
-            style={{ display: 'none' }}
-          />
-          <div className="ax-row" style={{ gap: 8 }}>
-            <button
-              className="ax-btn"
-              onClick={() => fileRef.current?.click()}
+        {mode === 'upload' ? (
+          <div style={{ marginBottom: 12 }}>
+            <span className="ax-lbl" style={{ display: 'block', marginBottom: 4 }}>Data file</span>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={onPick}
               disabled={busy}
-              type="button"
-            >
-              {file ? 'Choose different file' : 'Upload file'}
-            </button>
-            <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {file ? file.name : 'No file selected · .csv, .xlsx, .xls (max 50 MB)'}
-            </span>
+              style={{ display: 'none' }}
+            />
+            <div className="ax-row" style={{ gap: 8 }}>
+              <button
+                className="ax-btn"
+                onClick={() => fileRef.current?.click()}
+                disabled={busy}
+                type="button"
+              >
+                {file ? 'Choose different file' : 'Upload file'}
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {file ? file.name : 'No file selected · .csv, .xlsx, .xls (max 50 MB)'}
+              </span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div style={{ marginBottom: 12 }}>
+            <span className="ax-lbl" style={{ display: 'block', marginBottom: 4 }}>Pick a previously uploaded file</span>
+            <div
+              style={{
+                maxHeight: 220,
+                overflow: 'auto',
+                border: '0.5px solid var(--color-border-tertiary)',
+                borderRadius: 6,
+              }}
+            >
+              {loadingExisting ? (
+                <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', padding: 12, margin: 0 }}>
+                  Loading files…
+                </p>
+              ) : existing.length === 0 ? (
+                <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', padding: 12, margin: 0 }}>
+                  No files yet. Upload one in the other tab.
+                </p>
+              ) : (
+                existing.map((d) => {
+                  const active = d.id === selectedId
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => onPickExisting(d)}
+                      disabled={busy}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '8px 12px',
+                        border: 0,
+                        borderBottom: '0.5px solid var(--color-border-tertiary)',
+                        background: active ? 'var(--color-accent-light)' : 'transparent',
+                        cursor: 'pointer',
+                        font: 'inherit',
+                        color: 'inherit',
+                      }}
+                    >
+                      <p style={{ fontSize: 12, fontWeight: 500, margin: 0, fontFamily: 'var(--font-mono)' }}>
+                        {d.filename || d.name}
+                      </p>
+                      <p style={{ fontSize: 11, color: 'var(--color-text-secondary)', margin: '2px 0 0' }}>
+                        {d.row_count?.toLocaleString()} rows · {d.col_count} columns
+                        {d.created_at && ` · ${new Date(d.created_at).toLocaleDateString()}`}
+                      </p>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        )}
 
         {error && (
           <p style={{ fontSize: 12, color: 'var(--color-text-danger)', margin: '0 0 10px' }}>

@@ -260,48 +260,68 @@ def list_datasets():
 
 @app.route("/api/datasets/upload", methods=["POST"])
 def upload_dataset():
-    """Accepts a CSV or Excel file and stores it as a Dataset."""
-    if "file" not in request.files:
-        return {"error": "no file"}, 400
-    f = request.files["file"]
-    name = request.form.get("name") or f.filename
+    """Create a Dataset from either an uploaded file or an existing Dataset.
+
+    Accepts multipart form data with one of:
+      - file:           uploaded CSV/Excel file
+      - from_dataset_id: id of an existing Dataset to clone the data from
+    Optional fields: name, description.
+    """
+    name = request.form.get("name")
     description = (request.form.get("description") or "").strip() or None
+    from_id = request.form.get("from_dataset_id")
 
-    # read the file
-    try:
-        if f.filename.lower().endswith(".csv"):
-            df = pd.read_csv(f)
-        elif f.filename.lower().endswith((".xlsx", ".xls")):
-            df = pd.read_excel(f)
-        else:
-            return {"error": "unsupported file type"}, 400
-    except Exception as e:
-        return {"error": f"failed to parse: {e}"}, 400
-
-    variables = infer_variables(df)
-    records = df.where(pd.notnull(df), None).to_dict(orient="records")
-
-    ds_id = str(uuid.uuid4())
     s = db()
     try:
+        if from_id:
+            src = s.query(Dataset).filter_by(id=from_id).first()
+            if not src:
+                return {"error": "source dataset not found"}, 404
+            variables = jload(src.variables) or []
+            records = jload(src.data) or []
+            row_count = src.row_count
+            col_count = src.col_count
+            filename = src.filename
+            final_name = name or src.name
+        else:
+            if "file" not in request.files:
+                return {"error": "no file"}, 400
+            f = request.files["file"]
+            try:
+                if f.filename.lower().endswith(".csv"):
+                    df = pd.read_csv(f)
+                elif f.filename.lower().endswith((".xlsx", ".xls")):
+                    df = pd.read_excel(f)
+                else:
+                    return {"error": "unsupported file type"}, 400
+            except Exception as e:
+                return {"error": f"failed to parse: {e}"}, 400
+            variables = infer_variables(df)
+            records = clean_json(df.where(pd.notnull(df), None).to_dict(orient="records"))
+            row_count = len(df)
+            col_count = len(df.columns)
+            filename = f.filename
+            final_name = name or f.filename
+
+        ds_id = str(uuid.uuid4())
         ds = Dataset(
             id=ds_id,
-            name=name,
+            name=final_name,
             description=description,
-            filename=f.filename,
-            row_count=len(df),
-            col_count=len(df.columns),
+            filename=filename,
+            row_count=row_count,
+            col_count=col_count,
             variables=jdump(variables),
-            data=jdump(clean_json(records)),
+            data=jdump(records),
         )
         s.add(ds)
         s.commit()
         return {
             "id": ds_id,
-            "name": name,
+            "name": final_name,
             "description": description,
-            "row_count": len(df),
-            "col_count": len(df.columns),
+            "row_count": row_count,
+            "col_count": col_count,
             "variables": variables,
         }
     finally:
