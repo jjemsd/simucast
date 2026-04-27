@@ -616,6 +616,7 @@ input[type="range"]::-moz-range-thumb {
   position: absolute;
   top: 100%;
   left: 0;
+  right: auto;
   margin-top: 4px;
   width: 320px;
   max-height: 480px;
@@ -630,6 +631,10 @@ input[type="range"]::-moz-range-thumb {
   font-weight: 400;
   white-space: normal;
   text-transform: none;
+}
+.ax-col-popover.right {
+  left: auto;
+  right: 0;
 }
 .ax-col-pop-msg {
   font-size: 12px;
