@@ -997,6 +997,185 @@ def clean_apply(ds_id):
     finally:
         s.close()
 
+
+# --- Manual transforms (merge / rename / drop / cast) ---
+
+@app.route("/api/datasets/<ds_id>/transform", methods=["POST"])
+def transform(ds_id):
+    """Apply a manual schema transform — merge columns, rename, drop, cast.
+
+    Body: {op, params}. Set ?preview=true to return a sample of the result
+    without persisting; otherwise a new stage is created.
+
+    Supported ops:
+      - merge_columns: {columns, new_name, separator, drop_originals}
+      - rename_column: {column, new_name}
+      - drop_columns:  {columns}
+      - drop_rows:     {column, predicate=missing|equals|gt|lt|in,
+                         value?}
+      - cast_column:   {column, to: numeric|datetime|category|text}
+      - split_column:  {column, separator, into}
+    """
+    body = request.get_json() or {}
+    op = (body.get("op") or "").strip()
+    params = body.get("params") or {}
+    preview = request.args.get("preview", "").lower() in ("1", "true", "yes")
+
+    s = db()
+    try:
+        ds = s.query(Dataset).filter_by(id=ds_id).first()
+        if not ds:
+            return {"error": "not found"}, 404
+        df = df_from_dataset(ds, s)
+
+        try:
+            df_new, summary = _apply_transform(df, op, params)
+        except ValueError as e:
+            return {"error": str(e)}, 400
+
+        if preview:
+            sample = df_new.head(20)
+            sample_records = clean_json(
+                sample.where(pd.notnull(sample), None).to_dict(orient="records")
+            )
+            return jsonify({
+                "preview": True,
+                "summary": summary,
+                "row_count": int(len(df_new)),
+                "col_count": int(len(df_new.columns)),
+                "columns": list(df_new.columns),
+                "sample": sample_records,
+            })
+
+        stage = create_stage(s, ds, df_new, op_type=op, op_params=params, summary=summary)
+        return jsonify({
+            "ok": True,
+            "stage_id": stage.id,
+            "summary": summary,
+            "row_count": ds.row_count,
+            "col_count": ds.col_count,
+        })
+    finally:
+        s.close()
+
+
+def _apply_transform(df, op, params):
+    """Pure transform — returns (new_df, summary) or raises ValueError."""
+    if op == "merge_columns":
+        cols = params.get("columns") or []
+        new_name = (params.get("new_name") or "").strip()
+        sep = params.get("separator", " ")
+        drop_originals = bool(params.get("drop_originals", True))
+        if len(cols) < 2:
+            raise ValueError("merge_columns: pick at least two columns")
+        if not new_name:
+            raise ValueError("merge_columns: new_name is required")
+        for c in cols:
+            if c not in df.columns:
+                raise ValueError(f"merge_columns: '{c}' not in columns")
+        out = df.copy()
+        merged = out[cols].astype(str).agg(sep.join, axis=1)
+        # if every source value was NaN/empty, treat the merged value as NaN too
+        all_blank = out[cols].isna().all(axis=1)
+        merged = merged.where(~all_blank, other=None)
+        out[new_name] = merged
+        if drop_originals:
+            out = out.drop(columns=[c for c in cols if c != new_name])
+        summary = (
+            f"Merged {len(cols)} columns ({', '.join(cols)}) into '{new_name}' "
+            f"with separator {sep!r}" + (" and dropped originals" if drop_originals else "")
+        )
+        return out, summary
+
+    if op == "rename_column":
+        col = params.get("column")
+        new_name = (params.get("new_name") or "").strip()
+        if col not in df.columns:
+            raise ValueError(f"rename_column: '{col}' not in columns")
+        if not new_name:
+            raise ValueError("rename_column: new_name is required")
+        if new_name in df.columns and new_name != col:
+            raise ValueError(f"rename_column: '{new_name}' already exists")
+        out = df.rename(columns={col: new_name})
+        return out, f"Renamed '{col}' → '{new_name}'"
+
+    if op == "drop_columns":
+        cols = params.get("columns") or []
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"drop_columns: not in dataset: {missing}")
+        if not cols:
+            raise ValueError("drop_columns: pick at least one column")
+        out = df.drop(columns=cols)
+        return out, f"Dropped {len(cols)} column{'s' if len(cols) != 1 else ''}: {', '.join(cols)}"
+
+    if op == "drop_rows":
+        col = params.get("column")
+        pred = (params.get("predicate") or "missing").lower()
+        value = params.get("value")
+        if col not in df.columns:
+            raise ValueError(f"drop_rows: '{col}' not in columns")
+        before = len(df)
+        if pred == "missing":
+            out = df.dropna(subset=[col])
+        elif pred == "equals":
+            out = df[df[col] != value]
+        elif pred == "gt":
+            out = df[~(df[col] > _coerce_num(value))]
+        elif pred == "lt":
+            out = df[~(df[col] < _coerce_num(value))]
+        elif pred == "in":
+            vals = value if isinstance(value, list) else [value]
+            out = df[~df[col].isin(vals)]
+        else:
+            raise ValueError(f"drop_rows: unknown predicate '{pred}'")
+        return out, f"Dropped {before - len(out)} rows where {col} {pred} {value!r}".rstrip("'\"")
+
+    if op == "cast_column":
+        col = params.get("column")
+        to = (params.get("to") or "").lower()
+        if col not in df.columns:
+            raise ValueError(f"cast_column: '{col}' not in columns")
+        out = df.copy()
+        if to == "numeric":
+            coerced = pd.to_numeric(out[col], errors="coerce")
+            errors = int(coerced.isna().sum() - out[col].isna().sum())
+            out[col] = coerced
+            return out, f"Cast '{col}' to numeric ({errors} value{'s' if errors != 1 else ''} became NaN)"
+        if to == "datetime":
+            coerced = pd.to_datetime(out[col], errors="coerce")
+            errors = int(coerced.isna().sum() - out[col].isna().sum())
+            out[col] = coerced.astype(str).where(coerced.notna(), None)
+            return out, f"Cast '{col}' to datetime ({errors} value{'s' if errors != 1 else ''} became NaN)"
+        if to == "category" or to == "text":
+            out[col] = out[col].astype(str).where(out[col].notna(), None)
+            return out, f"Cast '{col}' to {to}"
+        raise ValueError(f"cast_column: unsupported target '{to}'")
+
+    if op == "split_column":
+        col = params.get("column")
+        sep = params.get("separator", " ")
+        into = params.get("into") or []
+        if col not in df.columns:
+            raise ValueError(f"split_column: '{col}' not in columns")
+        if not into:
+            raise ValueError("split_column: 'into' must be a list of new column names")
+        parts = df[col].astype(str).str.split(sep, n=len(into) - 1, expand=True)
+        out = df.copy()
+        for i, name in enumerate(into):
+            out[name] = parts[i] if i < parts.shape[1] else None
+        return out, f"Split '{col}' by {sep!r} into {len(into)} columns: {', '.join(into)}"
+
+    raise ValueError(f"unknown op '{op}'")
+
+
+def _coerce_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return v
+
+
 # --- Descriptive stats ---
 
 @app.route("/api/datasets/<ds_id>/describe", methods=["POST"])
