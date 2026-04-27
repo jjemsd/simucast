@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import NewProjectModal from './NewProjectModal'
 
 export default function DashboardPage() {
   const [datasets, setDatasets] = useState([])
   const [uploading, setUploading] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
   const fileRef = useRef(null)
   const navigate = useNavigate()
 
@@ -15,7 +17,7 @@ export default function DashboardPage() {
   const totalRows = datasets.reduce((acc, d) => acc + (d.row_count || 0), 0)
   const latest = datasets[0]
 
-  const handleUpload = async (e) => {
+  const handleQuickUpload = async (e) => {
     const f = e.target.files?.[0]
     if (!f) return
     setUploading(true)
@@ -42,7 +44,7 @@ export default function DashboardPage() {
             ref={fileRef}
             type="file"
             accept=".csv,.xlsx,.xls"
-            onChange={handleUpload}
+            onChange={handleQuickUpload}
             style={{ display: 'none' }}
           />
           <button
@@ -54,10 +56,9 @@ export default function DashboardPage() {
           </button>
           <button
             className="ax-btn prim"
-            disabled={uploading}
-            onClick={() => fileRef.current?.click()}
+            onClick={() => setModalOpen(true)}
           >
-            {uploading ? 'Uploading…' : '+ Add new project'}
+            + Add new project
           </button>
         </div>
       </div>
@@ -79,7 +80,7 @@ export default function DashboardPage() {
           {datasets.length === 0 ? (
             <div className="ax-card">
               <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: 0 }}>
-                No projects yet. Click <strong>+ Add new project</strong> to upload a dataset.
+                No projects yet. Click <strong>+ Add new project</strong> to get started.
               </p>
             </div>
           ) : (
@@ -144,6 +145,15 @@ export default function DashboardPage() {
           )}
         </section>
       </div>
+
+      <NewProjectModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onCreated={(result) => {
+          setModalOpen(false)
+          navigate(`/projects/${result.id}`)
+        }}
+      />
     </>
   )
 }
