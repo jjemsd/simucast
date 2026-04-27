@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import ManualTransformsCard from './ManualTransformsCard'
 
 export default function CleanPage({ dataset, setDataset }) {
   const [suggestions, setSuggestions] = useState([])
@@ -54,6 +55,15 @@ export default function CleanPage({ dataset, setDataset }) {
         <StatCard label="Outliers" value={outliers} />
         <StatCard label="Type issues" value={types} />
       </div>
+
+      <ManualTransformsCard
+        dataset={dataset}
+        onApplied={async () => {
+          const fresh = await api.getDataset(dataset.id)
+          setDataset(fresh)
+          load()
+        }}
+      />
 
       <p className="ax-lbl">Suggested fixes</p>
       {loading ? (

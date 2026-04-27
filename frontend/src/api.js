@@ -87,6 +87,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  transform: (id, op, params, preview = false) =>
+    request(`/api/datasets/${id}/transform${preview ? '?preview=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify({ op, params }),
+    }),
 
   // describe
   describe: (id, body) =>
