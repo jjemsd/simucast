@@ -59,16 +59,56 @@ npm run dev
 ```
 Runs on `http://localhost:5173`, proxying `/api` to the backend.
 
-## Deploy to Render
+## Deploy to Render (manual)
 
-1. Push this repo to GitHub.
-2. In Render dashboard, click **New → Blueprint**, select the repo.
-3. Render reads `render.yaml` and provisions:
-   - `axion-db` — PostgreSQL (free tier)
-   - `axion-api` — Python web service
-   - `axion-web` — static site (React build)
-4. After the API deploys, copy its URL (e.g. `https://axion-api.onrender.com`) and set `VITE_API_URL` on the `axion-web` service → Environment. Redeploy the static site.
-5. Lock down `CORS_ORIGINS` on the API to your web URL for production.
+Provision three resources in the Render dashboard. Pick a region first and use the same one for all three.
+
+### 1. Postgres database
+
+- **New → PostgreSQL**
+- Name: `simu-cast-db` · Database: `simucast` · User: `simucast` · Plan: Free
+- Click **Create**. Wait until status is **Available**.
+- Open the DB → **Connect** tab → copy the **Internal Database URL** (starts with `postgres://...internal...`). You'll need it for the API.
+
+### 2. API web service (Flask)
+
+- **New → Web Service** → connect this GitHub repo, pick the branch you want to deploy.
+- **Name**: `simu-cast-api`
+- **Region**: same as the DB
+- **Root Directory**: `backend`
+- **Runtime**: Python 3
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command**: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120`
+- **Plan**: Free
+- **Environment** (Advanced → Add Environment Variable):
+  - `DATABASE_URL` = paste the Internal Database URL from step 1
+  - `PYTHON_VERSION` = `3.11`
+  - `CORS_ORIGINS` = `*` for now (we'll lock it down after step 3)
+- Click **Create Web Service**. The first deploy will take 3–5 minutes; the app retries DB connections at startup and lazily creates tables on the first request, so it'll come up cleanly even if the DB is still warming.
+
+When the build finishes, note the public URL — something like `https://simu-cast-api.onrender.com`. You'll need it next.
+
+### 3. Frontend static site (React)
+
+- **New → Static Site** → same repo, same branch.
+- **Name**: `simu-cast-web`
+- **Build Command**: `cd frontend && npm install && npm run build`
+- **Publish Directory**: `frontend/dist`
+- **Environment**:
+  - `VITE_API_URL` = the API URL from step 2 (e.g. `https://simu-cast-api.onrender.com`)
+- **Redirects/Rewrites** (under the service settings after creation): add one rule
+  - **Source**: `/*` · **Destination**: `/index.html` · **Action**: Rewrite
+  - This is required for client-side routing (`/projects/abc` → loads `index.html` then React Router takes over).
+- Click **Create Static Site**.
+
+### 4. Lock down CORS
+
+Once the static site is live, copy its URL (e.g. `https://simu-cast-web.onrender.com`). Then on `simu-cast-api` → **Environment**, change `CORS_ORIGINS` from `*` to that URL. Save → the API redeploys automatically.
+
+### 5. Verify
+
+- `https://simu-cast-api.onrender.com/api/health` should return `{"status": "ok", "db_ready": true, ...}`
+- Open `https://simu-cast-web.onrender.com`, upload a CSV, click into the project. Network requests should hit the API URL above with no CORS errors in the console.
 
 ## API overview
 
